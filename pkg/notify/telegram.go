@@ -12,13 +12,12 @@ import (
     "huntsuite/pkg/config"
 )
 
-
-// SendMessage sends a plain text message via Telegram Bot API
+// SendMessage envia uma mensagem simples via Telegram Bot API
 func SendMessage(botToken, chatID, text string) error {
     url := fmt.Sprintf("https://api.telegram.org/bot%s/sendMessage", botToken)
     resp, err := http.PostForm(url, map[string][]string{
-        "chat_id": {chatID},
-        "text": {text},
+        "chat_id":    {chatID},
+        "text":       {text},
         "parse_mode": {"Markdown"},
     })
     if err != nil {
@@ -32,7 +31,7 @@ func SendMessage(botToken, chatID, text string) error {
     return nil
 }
 
-// SendDocument uploads a file (report) to Telegram chat
+// SendDocument envia um arquivo (relatório) para o chat do Telegram
 func SendDocument(botToken, chatID, filePath, caption string) error {
     url := fmt.Sprintf("https://api.telegram.org/bot%s/sendDocument", botToken)
     file, err := os.Open(filePath)
@@ -50,7 +49,7 @@ func SendDocument(botToken, chatID, filePath, caption string) error {
     if _, err := io.Copy(fw, file); err != nil {
         return err
     }
-    // add chat_id and caption fields
+    // adiciona chat_id e caption
     _ = w.WriteField("chat_id", chatID)
     if caption != "" {
         _ = w.WriteField("caption", caption)
@@ -75,32 +74,39 @@ func SendDocument(botToken, chatID, filePath, caption string) error {
     return nil
 }
 
-// AutoNotify checks env vars and sends message + document if available.
+// AutoNotify tenta enviar mensagem e arquivo automaticamente (usa env vars ou config)
 func AutoNotify(reportPath, summary string) error {
     botToken := os.Getenv("HUNTSUITE_TELEGRAM_TOKEN")
     chatID := os.Getenv("HUNTSUITE_TELEGRAM_CHAT_ID")
+
+    // tenta carregar do config se env vars não existirem
     if botToken == "" || chatID == "" {
-        // try config file
         cfg, _ := config.Load()
-        if botToken == "" {
-            botToken = cfg.TelegramToken
-        }
-        if chatID == "" {
-            chatID = cfg.TelegramChatID
+        if cfg != nil {
+            if botToken == "" {
+                botToken = cfg.TelegramToken
+            }
+            if chatID == "" {
+                chatID = cfg.TelegramChatID
+            }
         }
     }
 
-    chatID := os.Getenv("HUNTSUITE_TELEGRAM_CHAT_ID")
+    // se ainda assim não há dados, não faz nada
     if botToken == "" || chatID == "" {
-        return nil // nothing to do
+        return nil
     }
-    // send short message
+
+    // envia mensagem de resumo
     msg := "[HuntSuite] " + summary
     if err := SendMessage(botToken, chatID, msg); err != nil {
         return err
     }
+
+    // envia documento se existir
     if reportPath != "" {
-        if err := SendDocument(botToken, chatID, reportPath, "HuntSuite report"); err != nil {
+        abs, _ := filepath.Abs(reportPath)
+        if err := SendDocument(botToken, chatID, abs, "HuntSuite report"); err != nil {
             return err
         }
     }
