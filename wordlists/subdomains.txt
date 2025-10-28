@@ -1,0 +1,17 @@
+www
+api
+dev
+staging
+admin
+mail
+imap
+smtp
+portal
+test
+secure
+beta
+m
+shop
+webmail
+internal
+support
