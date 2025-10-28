@@ -21,7 +21,7 @@ HuntSuite é um scaffold escrito em Go para construir uma plataforma de pentest 
 ├── payloads/            # Payloads de teste para fuzzing (SSRF, XSS)
 ├── wordlists/           # Wordlists de subdomínios utilizadas no recon
 ├── Makefile             # Atalhos para build/clean
-├── go.mod / go.sum      # Dependências Go
+├── go.mod               # Configuração de módulo Go
 └── README.md            # Este guia
 ```
 
@@ -29,7 +29,7 @@ HuntSuite é um scaffold escrito em Go para construir uma plataforma de pentest 
 - Go 1.20 ou superior (necessário para compilar o projeto)
 - Ferramentas opcionais:
   - [`interactsh-client`](https://github.com/projectdiscovery/interactsh) disponível no `PATH` para OOB real
-  - Banco SQLite (o driver `github.com/mattn/go-sqlite3` é incorporado via módulo Go)
+  - Persistência local via arquivo JSON (nenhum banco adicional é necessário)
   - Acesso à Internet para execução de enumeração DNS e crawling
 
 ## Configuração inicial
@@ -58,7 +58,7 @@ O binário `huntsuite` roteia para diferentes subcomandos. Cada subcomando possu
 | `recon`      | `--target` (domínio obrigatório), `--wordlist` (opcional) | Enumera subdomínios via `recon.SimpleRecon.EnumSubdomains`. Resultados são persistidos com `report.WriteJSONReport`.
 | `map`        | `--target` (URL obrigatória), `--timeout` (segundos) | Executa crawler limitado ao host inicial por meio de `mapper.SiteMapper.Crawl`.
 | `scan`       | `--target` (URL/domínio obrigatório), `--oob-domain` (domínio customizado), `--disclosure` (habilita sondas de divulgação) | Dispara `core.Engine.Scan` e, opcionalmente, `disclosure.Probe`.
-| `validate`   | `--target` (URL obrigatória), `--param` (nome do parâmetro SSRF), `--db` (arquivo SQLite) | Executa validação SSRF com `validator.ProbeSSRF`, salvando findings no banco e em JSON.
+| `validate`   | `--target` (URL obrigatória), `--param` (nome do parâmetro SSRF), `--db` (arquivo JSON) | Executa validação SSRF com `validator.ProbeSSRF`, persistindo findings em arquivo JSON e em relatórios.
 
 Caso nenhum comando seja informado, o programa exibe uso amigável via `usage()`.
 
@@ -113,9 +113,9 @@ A tabela abaixo lista todas as funções expostas no projeto, agrupadas por paco
 - `WriteJSONReport(prefix string, data interface{}) string` — grava artefato JSON com timestamp em `reports/` e dispara `notify.AutoNotify` em goroutine.
 
 ### `pkg/validator`
-- `InitDB(path string) (*sql.DB, error)` — cria/abre banco SQLite e garante tabela `findings`.
-- `SaveFinding(db *sql.DB, f Finding) (int64, error)` — insere finding na tabela e retorna `LastInsertId`.
-- `ProbeSSRF(db *sql.DB, target, param string) (*Finding, error)` — gera payload SSRF com domínio OOB, envia requisição, salva finding e reporta resultado em JSON.
+- `InitDB(path string) (*Storage, error)` — prepara arquivo JSON para armazenar findings e calcula o último ID utilizado.
+- `SaveFinding(store *Storage, f Finding) (int64, error)` — adiciona finding ao arquivo JSON e retorna o ID atribuído.
+- `ProbeSSRF(store *Storage, target, param string) (*Finding, error)` — gera payload SSRF com domínio OOB, envia requisição, salva finding no JSON e reporta resultado em arquivo.
 
 ## Wordlists e payloads
 - `wordlists/subdomains.txt` — lista de subdomínios base utilizada por `pkg/recon`. Substitua ou expanda conforme necessário.
