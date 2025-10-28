@@ -1,12 +1,10 @@
 package report
 
 import (
-    "os"
+
     "huntsuite/pkg/notify"
     "encoding/json"
     "log"
-    "os"
-    "path/filepath"
     "time"
 )
 
