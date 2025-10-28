@@ -1,18 +1,23 @@
 package mapper
 
 import (
+    "io"
     "log"
     "net/http"
     "net/url"
+    "strings"
     "time"
-    "io"
+
     "golang.org/x/net/html"
 )
 
+// SiteMapper faz o mapeamento de links internos de um site
 type SiteMapper struct{}
 
+// NewSiteMapper cria uma nova instância do crawler
 func NewSiteMapper() *SiteMapper { return &SiteMapper{} }
 
+// Crawl percorre recursivamente links internos (mesmo domínio)
 func (m *SiteMapper) Crawl(start string, timeout time.Duration) {
     log.Printf("[mapper] start crawl %s", start)
     client := &http.Client{Timeout: timeout}
@@ -46,6 +51,7 @@ func (m *SiteMapper) Crawl(start string, timeout time.Duration) {
         if err != nil {
             continue
         }
+
         var f func(*html.Node)
         f = func(n *html.Node) {
             if n.Type == html.ElementNode && n.Data == "a" {
