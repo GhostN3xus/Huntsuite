@@ -138,4 +138,3 @@ O scaffold inclui pontos para evolução imediata:
 - Persistir resultados em banco e construir UI para revisão manual dos findings.
 - Expandir biblioteca de validações automáticas (XSS, SQLi, SSRF com comprovação OOB).
 
-> **Nota**: Alguns arquivos contêm código de exemplo que ainda requer pequenos ajustes (imports duplicados ou omissões). Utilize este guia como base para navegar e refatorar o projeto conforme suas necessidades.
