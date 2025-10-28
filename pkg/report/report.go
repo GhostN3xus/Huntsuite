@@ -2,7 +2,7 @@ package report
 
 import (
     "os"
-    "filepath"
+    "path/filepath"
     "huntsuite/pkg/notify"
     "encoding/json"
     "log"
