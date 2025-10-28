@@ -1,10 +1,6 @@
 package notify
 
 import (
-    "os"
-    "huntsuite/pkg/config"
-    "path/filepath"
-    
     "bytes"
     "fmt"
     "io"
@@ -12,7 +8,10 @@ import (
     "net/http"
     "os"
     "path/filepath"
+
+    "huntsuite/pkg/config"
 )
+
 
 // SendMessage sends a plain text message via Telegram Bot API
 func SendMessage(botToken, chatID, text string) error {
