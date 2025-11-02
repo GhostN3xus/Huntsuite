@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"io"
@@ -36,6 +37,7 @@ type Options struct {
 	Timeout    time.Duration
 	UserAgent  string
 	Delay      time.Duration
+	Headers    http.Header
 }
 
 // FindingSeverity enumerates severity levels.
@@ -82,6 +84,7 @@ type injectionLocation string
 const (
 	locationQuery injectionLocation = "query"
 	locationBody  injectionLocation = "body"
+	locationJSON  injectionLocation = "json"
 )
 
 type injectionPoint struct {
@@ -94,6 +97,7 @@ type injectionPoint struct {
 	Headers     http.Header
 	BaseValue   string
 	Source      string
+	JSONValues  map[string]string
 }
 
 func (p injectionPoint) templateForValue(value string) requestTemplate {
@@ -128,6 +132,24 @@ func (p injectionPoint) templateForValue(value string) requestTemplate {
 			contentType = "application/x-www-form-urlencoded"
 		}
 		headers.Set("Content-Type", contentType)
+	case locationJSON:
+		payload := cloneJSONMap(p.JSONValues)
+		if payload == nil {
+			payload = map[string]string{}
+		}
+		payload[p.Name] = value
+		encoded, err := json.Marshal(payload)
+		if err == nil {
+			body = encoded
+		}
+		if headers == nil {
+			headers = http.Header{}
+		}
+		contentType := p.ContentType
+		if strings.TrimSpace(contentType) == "" {
+			contentType = "application/json"
+		}
+		headers.Set("Content-Type", contentType)
 	}
 
 	return requestTemplate{
@@ -143,6 +165,8 @@ func (p injectionPoint) label() string {
 	if source == "" {
 		if p.Location == locationBody {
 			source = "request body"
+		} else if p.Location == locationJSON {
+			source = "JSON body"
 		} else {
 			source = "query"
 		}
@@ -182,6 +206,12 @@ func (e *Engine) Run(ctx context.Context, opts Options) error {
 	if parsed.Scheme == "" {
 		parsed.Scheme = "https"
 	}
+
+	resolved, err := e.resolveTarget(ctx, parsed, opts)
+	if err != nil {
+		return fmt.Errorf("engine: resolve target: %w", err)
+	}
+	parsed = resolved
 
 	targetID, err := e.store.UpsertTarget(ctx, parsed.Host, "")
 	if err != nil {
@@ -244,6 +274,88 @@ func (e *Engine) Run(ctx context.Context, opts Options) error {
 	return nil
 }
 
+
+func (e *Engine) resolveTarget(ctx context.Context, target *url.URL, opts Options) (*url.URL, error) {
+	if target == nil {
+		return nil, fmt.Errorf("engine: nil target")
+	}
+	current := cloneURL(target)
+	if current.Scheme == "" {
+		current.Scheme = "https"
+	}
+
+	visited := map[string]struct{}{current.String(): {}}
+	maxRedirects := 5
+
+	for redirects := 0; redirects <= maxRedirects; redirects++ {
+		method := http.MethodHead
+		for attempt := 0; attempt < 2; attempt++ {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			req, err := http.NewRequestWithContext(ctx, method, current.String(), nil)
+			if err != nil {
+				return nil, err
+			}
+			if method == http.MethodGet {
+				req.Header.Set("Range", "bytes=0-0")
+			}
+			applyHeaders(req, nil, opts.Headers, opts.UserAgent)
+
+			resp, err := e.client.Do(req)
+			if err != nil {
+				if method == http.MethodHead {
+					method = http.MethodGet
+					continue
+				}
+				return nil, fmt.Errorf("engine: probe target %s: %w", current.String(), err)
+			}
+
+			if _, drainErr := io.CopyN(io.Discard, resp.Body, 512); drainErr != nil && !errors.Is(drainErr, io.EOF) {
+				e.logger.Debug("drain probe response failed", logging.Fields{"error": drainErr})
+			}
+			resp.Body.Close()
+
+			if resp.StatusCode == http.StatusMethodNotAllowed && method == http.MethodHead {
+				method = http.MethodGet
+				continue
+			}
+
+			if resp.StatusCode >= 300 && resp.StatusCode <= 399 {
+				location := strings.TrimSpace(resp.Header.Get("Location"))
+				if location == "" {
+					return current, nil
+				}
+				next, err := current.Parse(location)
+				if err != nil {
+					return nil, fmt.Errorf("engine: invalid redirect location %q: %w", location, err)
+				}
+				canonical := next.String()
+				if _, seen := visited[canonical]; seen {
+					return nil, fmt.Errorf("engine: redirect loop detected for %s", canonical)
+				}
+				visited[canonical] = struct{}{}
+				current = next
+				break
+			}
+
+			if resp.StatusCode >= 200 && resp.StatusCode < 400 {
+				return current, nil
+			}
+
+			if method == http.MethodHead {
+				method = http.MethodGet
+				continue
+			}
+
+			return nil, fmt.Errorf("engine: target %s responded with status %d", current.String(), resp.StatusCode)
+		}
+	}
+
+	return nil, fmt.Errorf("engine: too many redirects for %s", target.String())
+}
+
+
 func (e *Engine) injectionSurface(ctx context.Context, scanID int64, target *url.URL, opts Options) ([]injectionPoint, error) {
 	if points, ok := injectionPointsFromContext(ctx); ok {
 		return points, nil
@@ -271,6 +383,8 @@ func (e *Engine) runXSS(ctx context.Context, scanID int64, target *url.URL, opts
 			value := combineWithPayload(point.BaseValue, payload)
 			reqTemplate := point.templateForValue(value)
 
+
+			result, err := e.sendAndEvaluate(ctx, scanID, reqTemplate, opts.UserAgent, opts.Headers, func(resp *responsePayload) (bool, string) {
 			result, err := e.sendAndEvaluate(ctx, scanID, reqTemplate, opts.UserAgent, func(resp *responsePayload) (bool, string) {
 				return detectXSS(resp, payload)
 			})
@@ -330,7 +444,7 @@ func (e *Engine) runSQLi(ctx context.Context, scanID int64, target *url.URL, opt
 			return findings, err
 		}
 
-		baseline, err := e.measureLatency(ctx, scanID, point.templateForValue(point.BaseValue), opts.UserAgent, 2)
+		baseline, err := e.measureLatency(ctx, scanID, point.templateForValue(point.BaseValue), opts.UserAgent, opts.Headers, 2)
 		if err != nil {
 			e.logger.Debug("baseline measurement failed", logging.Fields{
 				"parameter": point.Name,
@@ -345,7 +459,7 @@ func (e *Engine) runSQLi(ctx context.Context, scanID int64, target *url.URL, opt
 			value := combineWithPayload(point.BaseValue, payload)
 			template := point.templateForValue(value)
 
-			result, err := e.sendAndEvaluate(ctx, scanID, template, opts.UserAgent, func(resp *responsePayload) (bool, string) {
+			result, err := e.sendAndEvaluate(ctx, scanID, template, opts.UserAgent, opts.Headers, func(resp *responsePayload) (bool, string) {
 				return detectSQLError(resp, keywords)
 			})
 
@@ -393,7 +507,7 @@ func (e *Engine) runSQLi(ctx context.Context, scanID int64, target *url.URL, opt
 			trueTemplate := point.templateForValue(combineWithPayload(point.BaseValue, payload.TruePayload))
 			falseTemplate := point.templateForValue(combineWithPayload(point.BaseValue, payload.FalsePayload))
 
-			trueResp, err := e.execute(ctx, scanID, trueTemplate, opts.UserAgent)
+			trueResp, err := e.execute(ctx, scanID, trueTemplate, opts.UserAgent, opts.Headers)
 			if err != nil {
 				e.logger.Debug("boolean true request failed", logging.Fields{
 					"parameter": point.Name,
@@ -407,6 +521,8 @@ func (e *Engine) runSQLi(ctx context.Context, scanID int64, target *url.URL, opt
 				return findings, err
 			}
 
+
+			falseResp, err := e.execute(ctx, scanID, falseTemplate, opts.UserAgent, opts.Headers)
 			falseResp, err := e.execute(ctx, scanID, falseTemplate, opts.UserAgent)
 			if err != nil {
 				e.logger.Debug("boolean false request failed", logging.Fields{
@@ -448,7 +564,7 @@ func (e *Engine) runSQLi(ctx context.Context, scanID int64, target *url.URL, opt
 		for _, payload := range timePayloads {
 			value := combineWithPayload(point.BaseValue, payload.Payload)
 			template := point.templateForValue(value)
-			resp, err := e.execute(ctx, scanID, template, opts.UserAgent)
+			resp, err := e.execute(ctx, scanID, template, opts.UserAgent, opts.Headers)
 			if err != nil {
 				e.logger.Debug("time-based request failed", logging.Fields{
 					"parameter": point.Name,
@@ -521,6 +637,8 @@ func (e *Engine) runSSRF(ctx context.Context, scanID int64, target *url.URL, opt
 			value := combineWithPayload(point.BaseValue, payload)
 			reqTemplate := point.templateForValue(value)
 
+
+			result, err := e.sendAndEvaluate(ctx, scanID, reqTemplate, opts.UserAgent, opts.Headers, func(resp *responsePayload) (bool, string) {
 			result, err := e.sendAndEvaluate(ctx, scanID, reqTemplate, opts.UserAgent, func(resp *responsePayload) (bool, string) {
 				return detectSSRF(resp, domain)
 			})
@@ -589,27 +707,41 @@ func (e *Engine) enumerateInjectionPoints(ctx context.Context, scanID int64, tar
 	}
 
 	for idx, form := range forms {
-		location := locationQuery
 		method := strings.ToUpper(strings.TrimSpace(form.Method))
 		if method == "" {
 			method = http.MethodGet
 		}
-		if method == http.MethodPost {
+
+		lowerEnctype := strings.ToLower(strings.TrimSpace(form.Enctype))
+		location := locationQuery
+		if strings.Contains(lowerEnctype, "json") {
+			location = locationJSON
+		} else if method == http.MethodPost {
 			location = locationBody
 		}
 
-		if location == locationBody && strings.Contains(strings.ToLower(form.Enctype), "multipart") {
+		if strings.Contains(lowerEnctype, "multipart") {
 			e.logger.Debug("skipping multipart form", logging.Fields{"form": form.Source})
 			continue
 		}
 
 		values := url.Values{}
+		jsonValues := map[string]string{}
 		for _, input := range form.Inputs {
-			if input.Name != "" {
+			if input.Name == "" {
+				continue
+			}
+			if location == locationJSON {
+				jsonValues[input.Name] = input.Value
+			} else {
 				values.Set(input.Name, input.Value)
 			}
 		}
-		if len(values) == 0 {
+
+		if location == locationJSON && len(jsonValues) == 0 {
+			continue
+		}
+		if location != locationJSON && len(values) == 0 {
 			continue
 		}
 
@@ -622,16 +754,21 @@ func (e *Engine) enumerateInjectionPoints(ctx context.Context, scanID int64, tar
 			if input.Name == "" {
 				continue
 			}
-			points = append(points, injectionPoint{
+			point := injectionPoint{
 				Name:        input.Name,
 				Method:      method,
 				URL:         cloneURL(form.Action),
 				Location:    location,
-				Values:      cloneValues(values),
 				ContentType: form.Enctype,
 				Source:      source,
 				BaseValue:   input.Value,
-			})
+			}
+			if location == locationJSON {
+				point.JSONValues = cloneJSONMap(jsonValues)
+			} else {
+				point.Values = cloneValues(values)
+			}
+			points = append(points, point)
 		}
 	}
 
@@ -648,8 +785,8 @@ func (e *Engine) enumerateInjectionPoints(ctx context.Context, scanID int64, tar
 	return points, nil
 }
 
-func (e *Engine) sendAndEvaluate(ctx context.Context, scanID int64, template requestTemplate, userAgent string, evaluator func(*responsePayload) (bool, string)) (*evaluationResult, error) {
-	resp, err := e.execute(ctx, scanID, template, userAgent)
+func (e *Engine) sendAndEvaluate(ctx context.Context, scanID int64, template requestTemplate, userAgent string, globalHeaders http.Header, evaluator func(*responsePayload) (bool, string)) (*evaluationResult, error) {
+	resp, err := e.execute(ctx, scanID, template, userAgent, globalHeaders)
 	if err != nil {
 		return nil, err
 	}
@@ -660,7 +797,31 @@ func (e *Engine) sendAndEvaluate(ctx context.Context, scanID int64, template req
 	return nil, nil
 }
 
-func (e *Engine) execute(ctx context.Context, scanID int64, template requestTemplate, userAgent string) (*responsePayload, error) {
+func applyHeaders(req *http.Request, template http.Header, global http.Header, userAgent string) {
+	if template != nil {
+		for key, values := range template {
+			for _, v := range values {
+				req.Header.Add(key, v)
+			}
+		}
+	}
+	if global != nil {
+		for key, values := range global {
+			canon := http.CanonicalHeaderKey(key)
+			if _, exists := req.Header[canon]; exists {
+				continue
+			}
+			for _, v := range values {
+				req.Header.Add(canon, v)
+			}
+		}
+	}
+	if userAgent != "" && req.Header.Get("User-Agent") == "" {
+		req.Header.Set("User-Agent", userAgent)
+	}
+}
+
+func (e *Engine) execute(ctx context.Context, scanID int64, template requestTemplate, userAgent string, globalHeaders http.Header) (*responsePayload, error) {
 	method := template.Method
 	if method == "" {
 		method = http.MethodGet
@@ -676,14 +837,7 @@ func (e *Engine) execute(ctx context.Context, scanID int64, template requestTemp
 		return nil, err
 	}
 
-	for key, values := range template.Headers {
-		for _, v := range values {
-			req.Header.Add(key, v)
-		}
-	}
-	if userAgent != "" && req.Header.Get("User-Agent") == "" {
-		req.Header.Set("User-Agent", userAgent)
-	}
+	applyHeaders(req, template.Headers, globalHeaders, userAgent)
 
 	reqBody := template.Body
 	if reqBody == nil {
@@ -722,7 +876,7 @@ func (e *Engine) execute(ctx context.Context, scanID int64, template requestTemp
 	}, nil
 }
 
-func (e *Engine) measureLatency(ctx context.Context, scanID int64, template requestTemplate, userAgent string, samples int) (time.Duration, error) {
+func (e *Engine) measureLatency(ctx context.Context, scanID int64, template requestTemplate, userAgent string, globalHeaders http.Header, samples int) (time.Duration, error) {
 	if samples <= 0 {
 		samples = 1
 	}
@@ -732,7 +886,7 @@ func (e *Engine) measureLatency(ctx context.Context, scanID int64, template requ
 		if err := ctx.Err(); err != nil {
 			return 0, err
 		}
-		resp, err := e.execute(ctx, scanID, template, userAgent)
+		resp, err := e.execute(ctx, scanID, template, userAgent, globalHeaders)
 		if err != nil {
 			return 0, err
 		}
@@ -933,6 +1087,17 @@ func cloneValues(q url.Values) url.Values {
 		cp := make([]string, len(v))
 		copy(cp, v)
 		cloned[k] = cp
+	}
+	return cloned
+}
+
+func cloneJSONMap(values map[string]string) map[string]string {
+	if values == nil {
+		return nil
+	}
+	cloned := make(map[string]string, len(values))
+	for k, v := range values {
+		cloned[k] = v
 	}
 	return cloned
 }

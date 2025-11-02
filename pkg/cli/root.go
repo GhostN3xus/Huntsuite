@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -101,6 +102,8 @@ func runScan(ctx context.Context, logger *logging.Logger, store *sqlite.Store, c
 	oobDomain := fs.String("oob-domain", "", "Out-of-band domain for SSRF validation")
 	delay := fs.Duration("delay", cfg.Scanning.RequestDelay, "Delay between payload injections")
 	proxyOverride := fs.String("proxy", "", "Override HTTP proxy for this scan")
+	var headerArgs headerFlag
+	fs.Var(&headerArgs, "header", "Additional request header in 'Key: Value' format (repeatable)")
 
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -125,6 +128,20 @@ func runScan(ctx context.Context, logger *logging.Logger, store *sqlite.Store, c
 
 	localClient := &http.Client{Timeout: client.Timeout, Transport: transport}
 	engine := scanner.NewEngine(store, logger.With(logging.Fields{"component": "engine"}), localClient)
+
+	combinedHeaders := http.Header{}
+	for k, v := range cfg.Scanning.Headers {
+		if strings.TrimSpace(k) == "" {
+			continue
+		}
+		combinedHeaders.Set(k, v)
+	}
+	for key, values := range headerArgs.Header() {
+		combinedHeaders.Del(key)
+		for _, v := range values {
+			combinedHeaders.Add(key, v)
+		}
+	}
 
 	enabled := map[string]bool{"xss": true, "sqli": true, "ssrf": true}
 	if *scannersArg != "" {
@@ -151,6 +168,7 @@ func runScan(ctx context.Context, logger *logging.Logger, store *sqlite.Store, c
 		Timeout:    client.Timeout,
 		UserAgent:  cfg.Scanning.UserAgent,
 		Delay:      *delay,
+		Headers:    cloneHTTPHeader(combinedHeaders),
 	}
 
 	if err := engine.Run(ctx, opts); err != nil {
@@ -235,6 +253,71 @@ func runReport(ctx context.Context, logger *logging.Logger, store *sqlite.Store,
 	fmt.Println("Report saved to", path)
 	logger.Info("report generated", logging.Fields{"path": path, "format": formatVal})
 	return nil
+}
+
+type headerFlag struct {
+	header http.Header
+}
+
+func (h *headerFlag) String() string {
+	if h == nil || h.header == nil {
+		return ""
+	}
+	keys := make([]string, 0, len(h.header))
+	for k := range h.header {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, fmt.Sprintf("%s: %s", k, strings.Join(h.header[k], "; ")))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func (h *headerFlag) Set(value string) error {
+	if h.header == nil {
+		h.header = http.Header{}
+	}
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	parts := strings.SplitN(value, ":", 2)
+	if len(parts) != 2 {
+		parts = strings.SplitN(value, "=", 2)
+		if len(parts) != 2 {
+			return fmt.Errorf("invalid header %q", value)
+		}
+	}
+	key := http.CanonicalHeaderKey(strings.TrimSpace(parts[0]))
+	if key == "" {
+		return fmt.Errorf("invalid header name in %q", value)
+	}
+	val := strings.TrimSpace(parts[1])
+	h.header.Del(key)
+	h.header.Add(key, val)
+	return nil
+}
+
+func (h *headerFlag) Header() http.Header {
+	if h.header == nil {
+		h.header = http.Header{}
+	}
+	return h.header
+}
+
+func cloneHTTPHeader(h http.Header) http.Header {
+	if h == nil {
+		return nil
+	}
+	cloned := make(http.Header, len(h))
+	for k, v := range h {
+		cp := make([]string, len(v))
+		copy(cp, v)
+		cloned[k] = cp
+	}
+	return cloned
 }
 
 func truncate(val string, limit int) string {

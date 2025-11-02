@@ -38,7 +38,7 @@ func (e *Engine) discoverForms(ctx context.Context, scanID int64, target *url.UR
 			"Accept": []string{"text/html,application/xhtml+xml"},
 		},
 	}
-	resp, err := e.execute(ctx, scanID, template, opts.UserAgent)
+	resp, err := e.execute(ctx, scanID, template, opts.UserAgent, opts.Headers)
 	if err != nil {
 		return nil, err
 	}
