@@ -111,12 +111,14 @@ func (e *Engine) Run(ctx context.Context, opts Options) error {
 	if opts.EnableXSS {
 		xssFindings, err := e.runXSS(ctx, scanID, injectionPoints, opts)
 		if err != nil {
+
 			e.logger.Error(
 				"xss scanner failed",
 				logging.Fields{
 					"error": err,
 				},
 			)
+			e.logger.Error("xss scanner failed", logging.Fields{"error": err})
 		} else {
 			findings = append(findings, xssFindings...)
 		}
@@ -125,12 +127,14 @@ func (e *Engine) Run(ctx context.Context, opts Options) error {
 	if opts.EnableSQLi {
 		sqliFindings, err := e.runSQLi(ctx, scanID, injectionPoints, opts)
 		if err != nil {
+
 			e.logger.Error(
 				"sqli scanner failed",
 				logging.Fields{
 					"error": err,
 				},
 			)
+			e.logger.Error("sqli scanner failed", logging.Fields{"error": err})
 		} else {
 			findings = append(findings, sqliFindings...)
 		}
@@ -139,12 +143,14 @@ func (e *Engine) Run(ctx context.Context, opts Options) error {
 	if opts.EnableSSRF {
 		ssrfFindings, err := e.runSSRF(ctx, scanID, injectionPoints, opts)
 		if err != nil {
+
 			e.logger.Error(
 				"ssrf scanner failed",
 				logging.Fields{
 					"error": err,
 				},
 			)
+			e.logger.Error("ssrf scanner failed", logging.Fields{"error": err})
 		} else {
 			findings = append(findings, ssrfFindings...)
 		}
@@ -167,10 +173,15 @@ func (e *Engine) Run(ctx context.Context, opts Options) error {
 			"findings": len(findings),
 		},
 	)
+		e.logger.Warn("failed to update scan status", logging.Fields{"error": err})
+	}
+
+	e.logger.Info("scan completed", logging.Fields{"scan_id": scanID, "findings": len(findings)})
 	return nil
 }
 
 func (e *Engine) runXSS(ctx context.Context, scanID int64, points []injectionPoint, opts Options) ([]Finding, error) {
+
 	e.logger.Info(
 		"running xss scanner",
 		logging.Fields{
@@ -178,6 +189,16 @@ func (e *Engine) runXSS(ctx context.Context, scanID int64, points []injectionPoi
 		},
 	)
 	payloadList := loadXSSPayloads()
+	e.logger.Info("running xss scanner", logging.Fields{"surface": len(points)})
+	payloadList := loadXSSPayloads()
+
+	payloads := loadXSSPayloads()
+	payloads := []string{
+		"<script>alert(1)</script>",
+		"\"'><script>alert('huntsuite')</script>",
+		"<img src=x onerror=alert(1)>",
+		"<svg/onload=alert(1)>",
+	}
 
 	findings := make([]Finding, 0)
 
@@ -186,10 +207,18 @@ func (e *Engine) runXSS(ctx context.Context, scanID int64, points []injectionPoi
 			return findings, err
 		}
 
+
 		for _, payload := range payloadList {
 			value := combineWithPayload(point.BaseValue, payload)
 			template := point.templateForValue(value)
 			evaluator := func(resp *responsePayload) (bool, string) {
+
+		for _, payload := range payloadList {
+		for _, payload := range payloads {
+			value := combineWithPayload(point.BaseValue, payload)
+			template := point.templateForValue(value)
+			result, err := e.sendAndEvaluate(ctx, scanID, template, opts.UserAgent, func(resp *responsePayload) (bool, string) {
+
 				return detectXSS(resp, payload)
 			}
 			result, err := e.sendAndEvaluate(ctx, scanID, template, opts.UserAgent, evaluator)
@@ -222,12 +251,15 @@ func (e *Engine) runXSS(ctx context.Context, scanID int64, points []injectionPoi
 				)
 				findings = append(findings, finding)
 				if err := e.persistFinding(ctx, scanID, finding); err != nil {
+
 					e.logger.Warn(
 						"persist finding failed",
 						logging.Fields{
 							"error": err,
 						},
 					)
+
+					e.logger.Warn("persist finding failed", logging.Fields{"error": err})
 				}
 				break
 			}
@@ -280,6 +312,8 @@ func (e *Engine) runSQLi(ctx context.Context, scanID int64, points []injectionPo
 					"error":     err,
 				},
 			)
+
+			e.logger.Debug("baseline measurement failed", logging.Fields{"parameter": point.Name, "source": point.Source, "error": err})
 			baseline = 0
 		}
 
@@ -287,7 +321,11 @@ func (e *Engine) runSQLi(ctx context.Context, scanID int64, points []injectionPo
 		for _, payload := range errorPayloads {
 			value := combineWithPayload(point.BaseValue, payload)
 			template := point.templateForValue(value)
+
 			evaluator := func(resp *responsePayload) (bool, string) {
+
+			evaluator := func(resp *responsePayload) (bool, string) {
+			result, err := e.sendAndEvaluate(ctx, scanID, template, opts.UserAgent, func(resp *responsePayload) (bool, string) {
 				return detectSQLError(resp, keywords)
 			}
 			result, err := e.sendAndEvaluate(ctx, scanID, template, opts.UserAgent, evaluator)
@@ -449,6 +487,7 @@ func (e *Engine) runSQLi(ctx context.Context, scanID int64, points []injectionPo
 							"error": err,
 						},
 					)
+					e.logger.Warn("persist finding failed", logging.Fields{"error": err})
 				}
 				break
 			}
@@ -460,6 +499,70 @@ func (e *Engine) runSQLi(ctx context.Context, scanID int64, points []injectionPo
 
 	return findings, nil
 }
+
+func (e *Engine) runSSRF(ctx context.Context, scanID int64, points []injectionPoint, opts Options) ([]Finding, error) {
+	domain := strings.TrimSpace(opts.OOBDomain)
+	if domain == "" {
+		return nil, nil
+	}
+	e.logger.Info("running ssrf scanner", logging.Fields{"surface": len(points), "oob_domain": domain})
+	payloads := []string{
+		fmt.Sprintf("http://%s/", domain),
+		fmt.Sprintf("https://%s/", domain),
+	}
+
+	findings := make([]Finding, 0)
+
+	for _, point := range points {
+		if err := ctx.Err(); err != nil {
+			return findings, err
+		}
+
+		for _, payload := range payloads {
+			value := combineWithPayload(point.BaseValue, payload)
+			template := point.templateForValue(value)
+
+			evaluator := func(resp *responsePayload) (bool, string) {
+				return detectSSRF(resp, domain)
+			}
+			result, err := e.sendAndEvaluate(ctx, scanID, template, opts.UserAgent, evaluator)
+			if err != nil {
+				e.logger.Debug("ssrf request failed", logging.Fields{"parameter": point.Name, "source": point.Source, "error": err})
+				continue
+			}
+			result, err := e.sendAndEvaluate(ctx, scanID, template, opts.UserAgent, func(resp *responsePayload) (bool, string) {
+				return detectSSRF(resp, domain)
+			})
+			if err != nil {
+				e.logger.Debug("ssrf request failed", logging.Fields{"parameter": point.Name, "source": point.Source, "error": err})
+				continue
+			}
+			if result != nil {
+				finding := Finding{
+					Title:       fmt.Sprintf("Potential SSRF in %s", point.Name),
+					Type:        "ssrf",
+					Severity:    SeverityHigh,
+					Description: fmt.Sprintf("Input referencing %s appears to trigger server-side requests from %s.", domain, point.label()),
+					Evidence:    result.Evidence,
+					PoC:         buildCurlCommand(template, opts.UserAgent),
+				}
+				e.logger.Warn("ssrf finding", logging.Fields{"parameter": point.Name, "source": point.Source})
+				findings = append(findings, finding)
+				if err := e.persistFinding(ctx, scanID, finding); err != nil {
+					e.logger.Warn("persist finding failed", logging.Fields{"error": err})
+				}
+				break
+			}
+			if err := waitDelay(ctx, opts.Delay); err != nil {
+				return findings, err
+			}
+		}
+	}
+
+
+	return findings, nil
+}
+
 
 func (e *Engine) runSSRF(ctx context.Context, scanID int64, points []injectionPoint, opts Options) ([]Finding, error) {
 	domain := strings.TrimSpace(opts.OOBDomain)
@@ -535,8 +638,49 @@ func (e *Engine) runSSRF(ctx context.Context, scanID int64, points []injectionPo
 			}
 		}
 	}
+type requestTemplate struct {
+	Method  string
+	URL     string
+	Headers http.Header
+	Body    []byte
+}
 
-	return findings, nil
+type responsePayload struct {
+	StatusCode int
+	Headers    http.Header
+	Body       []byte
+	Latency    time.Duration
+}
+
+type evaluationResult struct {
+	Evidence string
+}
+
+
+type responsePayload struct {
+	StatusCode int
+	Headers    http.Header
+	Body       []byte
+	Latency    time.Duration
+}
+
+
+type requestTemplate struct {
+	Method  string
+	URL     string
+	Headers http.Header
+	Body    []byte
+}
+
+type responsePayload struct {
+	StatusCode int
+	Headers    http.Header
+	Body       []byte
+	Latency    time.Duration
+}
+
+type evaluationResult struct {
+	Evidence string
 }
 
 type requestTemplate struct {
@@ -551,6 +695,10 @@ type responsePayload struct {
 	Headers    http.Header
 	Body       []byte
 	Latency    time.Duration
+}
+
+type evaluationResult struct {
+	Evidence string
 }
 
 type evaluationResult struct {
