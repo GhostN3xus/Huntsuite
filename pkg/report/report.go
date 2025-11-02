@@ -11,7 +11,7 @@ import (
 	textTemplate "text/template"
 	"time"
 
-	"huntsuite/pkg/storage/sqlite"
+	"github.com/GhostN3xus/Huntsuite/pkg/storage/sqlite"
 )
 
 const findingTemplate = `## {{.Type | upper}} in {{.TargetURL}}

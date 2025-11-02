@@ -12,13 +12,13 @@ import (
 	"strings"
 	"time"
 
-	"huntsuite/pkg/config"
-	"huntsuite/pkg/logging"
-	"huntsuite/pkg/output"
-	"huntsuite/pkg/report"
-	pkgRuntime "huntsuite/pkg/runtime"
-	"huntsuite/pkg/scanner"
-	"huntsuite/pkg/storage/sqlite"
+	"github.com/GhostN3xus/Huntsuite/pkg/config"
+	"github.com/GhostN3xus/Huntsuite/pkg/logging"
+	"github.com/GhostN3xus/Huntsuite/pkg/output"
+	"github.com/GhostN3xus/Huntsuite/pkg/report"
+	pkgRuntime "github.com/GhostN3xus/Huntsuite/pkg/runtime"
+	"github.com/GhostN3xus/Huntsuite/pkg/scanner"
+	"github.com/GhostN3xus/Huntsuite/pkg/storage/sqlite"
 )
 
 const version = "1.0.0"

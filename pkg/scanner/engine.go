@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"huntsuite/pkg/logging"
-	"huntsuite/pkg/storage/sqlite"
+	"github.com/GhostN3xus/Huntsuite/pkg/logging"
+	"github.com/GhostN3xus/Huntsuite/pkg/storage/sqlite"
 )
 
 const maxResponseBodyBytes = 2 * 1024 * 1024

@@ -1,16 +1,14 @@
 package mapper
 
 import (
-	"io"
+	"errors"
 	"log"
-	"net/http"
 	"net/url"
-	"regexp"
-	"strings"
+	"sync"
 	"time"
-)
 
-var hrefRe = regexp.MustCompile(`(?i)href=["']([^"'#]+)["']`)
+	"github.com/gocolly/colly/v2"
+)
 
 // SiteMapper faz o mapeamento de links internos de um site
 type SiteMapper struct{}
@@ -20,57 +18,97 @@ func NewSiteMapper() *SiteMapper { return &SiteMapper{} }
 
 // Crawl percorre recursivamente links internos (mesmo domínio)
 func (m *SiteMapper) Crawl(start string, timeout time.Duration) {
-	log.Printf("[mapper] start crawl %s", start)
-	client := &http.Client{Timeout: timeout}
+	if start == "" {
+		return
+	}
 	parsed, err := url.Parse(start)
 	if err != nil {
 		log.Printf("[mapper] parse error: %v", err)
 		return
 	}
-
-	queue := []string{start}
-	seen := map[string]bool{start: true}
-
-	for len(queue) > 0 {
-		u := queue[0]
-		queue = queue[1:]
-		log.Printf("[mapper] fetching: %s", u)
-		resp, err := client.Get(u)
-		if err != nil {
-			log.Printf("[mapper] fetch error: %v", err)
-			continue
-		}
-		body, err := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if err != nil {
-			log.Printf("[mapper] read error: %v", err)
-			continue
-		}
-		log.Printf("[mapper] %s -> %d bytes", u, len(body))
-
-		matches := hrefRe.FindAllSubmatch(body, -1)
-		for _, m := range matches {
-			href := strings.TrimSpace(string(m[1]))
-			if href == "" {
-				continue
-			}
-			abs, err := url.Parse(href)
-			if err != nil || (abs.Scheme == "" && abs.Host == "") {
-				abs = parsed.ResolveReference(&url.URL{Path: href})
-			}
-			if abs == nil {
-				continue
-			}
-			if abs.Hostname() == parsed.Hostname() {
-				u2 := abs.String()
-				if !seen[u2] {
-					seen[u2] = true
-					queue = append(queue, u2)
-				}
-			}
-		}
-		time.Sleep(500 * time.Millisecond)
+	if parsed.Scheme == "" {
+		parsed.Scheme = "https"
 	}
+	base := parsed.String()
 
-	log.Printf("[mapper] crawl finished; found %d pages", len(seen))
+	collector := colly.NewCollector(
+		colly.AllowedDomains(parsed.Hostname()),
+		colly.MaxDepth(3),
+		colly.Async(true),
+	)
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+	collector.SetRequestTimeout(timeout)
+	collector.Limit(&colly.LimitRule{DomainGlob: "*", Parallelism: 4, RandomDelay: 250 * time.Millisecond})
+
+	visited := struct {
+		sync.Mutex
+		urls map[string]struct{}
+		cnt  int
+	}{urls: map[string]struct{}{}}
+
+	collector.OnRequest(func(r *colly.Request) {
+		visited.Lock()
+		if visited.cnt >= 500 {
+			visited.Unlock()
+			r.Abort()
+			return
+		}
+		if _, ok := visited.urls[r.URL.String()]; ok {
+			visited.Unlock()
+			r.Abort()
+			return
+		}
+		visited.urls[r.URL.String()] = struct{}{}
+		visited.cnt++
+		visited.Unlock()
+		log.Printf("[mapper] visiting: %s", r.URL.String())
+	})
+
+	collector.OnHTML("a[href]", func(e *colly.HTMLElement) {
+		enqueue(e, "href")
+	})
+	collector.OnHTML("link[href]", func(e *colly.HTMLElement) {
+		enqueue(e, "href")
+	})
+	collector.OnHTML("script[src]", func(e *colly.HTMLElement) {
+		enqueue(e, "src")
+	})
+	collector.OnHTML("form[action]", func(e *colly.HTMLElement) {
+		enqueue(e, "action")
+	})
+
+	collector.OnError(func(r *colly.Response, err error) {
+		log.Printf("[mapper] error %s: %v", r.Request.URL, err)
+	})
+
+	collector.OnResponse(func(r *colly.Response) {
+		log.Printf("[mapper] %s -> %d", r.Request.URL.String(), r.StatusCode)
+	})
+
+	if err := collector.Visit(base); err != nil {
+		log.Printf("[mapper] visit error: %v", err)
+	}
+	collector.Wait()
+	visited.Lock()
+	total := len(visited.urls)
+	visited.Unlock()
+	log.Printf("[mapper] crawl finished; discovered %d unique pages", total)
+}
+
+func enqueue(e *colly.HTMLElement, attr string) {
+	raw := e.Attr(attr)
+	if raw == "" {
+		return
+	}
+	next := e.Request.AbsoluteURL(raw)
+	if next == "" {
+		return
+	}
+	if err := e.Request.Visit(next); err != nil {
+		if !errors.Is(err, colly.ErrAlreadyVisited) {
+			log.Printf("[mapper] enqueue error: %v", err)
+		}
+	}
 }

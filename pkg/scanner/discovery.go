@@ -9,7 +9,7 @@ import (
 	"regexp"
 	"strings"
 
-	"huntsuite/pkg/logging"
+	"github.com/GhostN3xus/Huntsuite/pkg/logging"
 )
 
 type formInput struct {

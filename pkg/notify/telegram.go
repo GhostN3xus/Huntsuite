@@ -9,7 +9,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"huntsuite/pkg/config"
+	"github.com/GhostN3xus/Huntsuite/pkg/config"
 )
 
 // SendMessage envia uma mensagem simples via Telegram Bot API
