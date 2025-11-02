@@ -136,6 +136,13 @@ func (e *Engine) Run(ctx context.Context, opts Options) error {
 func (e *Engine) runXSS(ctx context.Context, scanID int64, points []injectionPoint, opts Options) ([]Finding, error) {
 	e.logger.Info("running xss scanner", logging.Fields{"surface": len(points)})
 	payloadList := loadXSSPayloads()
+	payloads := loadXSSPayloads()
+	payloads := []string{
+		"<script>alert(1)</script>",
+		"\"'><script>alert('huntsuite')</script>",
+		"<img src=x onerror=alert(1)>",
+		"<svg/onload=alert(1)>",
+	}
 
 	findings := make([]Finding, 0)
 
@@ -144,7 +151,9 @@ func (e *Engine) runXSS(ctx context.Context, scanID int64, points []injectionPoi
 			return findings, err
 		}
 
+
 		for _, payload := range payloadList {
+		for _, payload := range payloads {
 			value := combineWithPayload(point.BaseValue, payload)
 			template := point.templateForValue(value)
 			result, err := e.sendAndEvaluate(ctx, scanID, template, opts.UserAgent, func(resp *responsePayload) (bool, string) {
@@ -381,6 +390,18 @@ type requestTemplate struct {
 	Headers http.Header
 	Body    []byte
 }
+
+type responsePayload struct {
+	StatusCode int
+	Headers    http.Header
+	Body       []byte
+	Latency    time.Duration
+}
+
+type evaluationResult struct {
+	Evidence string
+}
+
 
 type responsePayload struct {
 	StatusCode int
