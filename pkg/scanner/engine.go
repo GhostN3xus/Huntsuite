@@ -87,19 +87,37 @@ func (e *Engine) Run(ctx context.Context, opts Options) error {
 		_ = e.store.UpdateScanStatus(context.Background(), scanID, "completed", "Scan finished", true)
 	}()
 
-	e.logger.Info("scan started", logging.Fields{"scan_id": scanID, "target": opts.Target})
+	e.logger.Info(
+		"scan started",
+		logging.Fields{
+			"scan_id": scanID,
+			"target":  opts.Target,
+		},
+	)
 
 	injectionPoints, err := e.enumerateInjectionPoints(ctx, scanID, parsed, opts)
 	if err != nil {
 		return err
 	}
-	e.logger.Info("injection surface enumerated", logging.Fields{"points": len(injectionPoints)})
+	e.logger.Info(
+		"injection surface enumerated",
+		logging.Fields{
+			"points": len(injectionPoints),
+		},
+	)
 
 	var findings []Finding
 
 	if opts.EnableXSS {
 		xssFindings, err := e.runXSS(ctx, scanID, injectionPoints, opts)
 		if err != nil {
+
+			e.logger.Error(
+				"xss scanner failed",
+				logging.Fields{
+					"error": err,
+				},
+			)
 			e.logger.Error("xss scanner failed", logging.Fields{"error": err})
 		} else {
 			findings = append(findings, xssFindings...)
@@ -109,6 +127,13 @@ func (e *Engine) Run(ctx context.Context, opts Options) error {
 	if opts.EnableSQLi {
 		sqliFindings, err := e.runSQLi(ctx, scanID, injectionPoints, opts)
 		if err != nil {
+
+			e.logger.Error(
+				"sqli scanner failed",
+				logging.Fields{
+					"error": err,
+				},
+			)
 			e.logger.Error("sqli scanner failed", logging.Fields{"error": err})
 		} else {
 			findings = append(findings, sqliFindings...)
@@ -118,6 +143,13 @@ func (e *Engine) Run(ctx context.Context, opts Options) error {
 	if opts.EnableSSRF {
 		ssrfFindings, err := e.runSSRF(ctx, scanID, injectionPoints, opts)
 		if err != nil {
+
+			e.logger.Error(
+				"ssrf scanner failed",
+				logging.Fields{
+					"error": err,
+				},
+			)
 			e.logger.Error("ssrf scanner failed", logging.Fields{"error": err})
 		} else {
 			findings = append(findings, ssrfFindings...)
@@ -126,6 +158,21 @@ func (e *Engine) Run(ctx context.Context, opts Options) error {
 
 	summary := fmt.Sprintf("findings=%d", len(findings))
 	if err := e.store.UpdateScanStatus(ctx, scanID, "completed", summary, true); err != nil {
+		e.logger.Warn(
+			"failed to update scan status",
+			logging.Fields{
+				"error": err,
+			},
+		)
+	}
+
+	e.logger.Info(
+		"scan completed",
+		logging.Fields{
+			"scan_id":  scanID,
+			"findings": len(findings),
+		},
+	)
 		e.logger.Warn("failed to update scan status", logging.Fields{"error": err})
 	}
 
@@ -134,6 +181,14 @@ func (e *Engine) Run(ctx context.Context, opts Options) error {
 }
 
 func (e *Engine) runXSS(ctx context.Context, scanID int64, points []injectionPoint, opts Options) ([]Finding, error) {
+
+	e.logger.Info(
+		"running xss scanner",
+		logging.Fields{
+			"surface": len(points),
+		},
+	)
+	payloadList := loadXSSPayloads()
 	e.logger.Info("running xss scanner", logging.Fields{"surface": len(points)})
 	payloadList := loadXSSPayloads()
 
@@ -168,7 +223,14 @@ func (e *Engine) runXSS(ctx context.Context, scanID int64, points []injectionPoi
 			}
 			result, err := e.sendAndEvaluate(ctx, scanID, template, opts.UserAgent, evaluator)
 			if err != nil {
-				e.logger.Debug("xss request failed", logging.Fields{"parameter": point.Name, "source": point.Source, "error": err})
+				e.logger.Debug(
+					"xss request failed",
+					logging.Fields{
+						"parameter": point.Name,
+						"source":    point.Source,
+						"error":     err,
+					},
+				)
 				continue
 			}
 			if result != nil {
@@ -180,9 +242,23 @@ func (e *Engine) runXSS(ctx context.Context, scanID int64, points []injectionPoi
 					Evidence:    result.Evidence,
 					PoC:         buildCurlCommand(template, opts.UserAgent),
 				}
-				e.logger.Warn("xss finding", logging.Fields{"parameter": point.Name, "source": point.Source})
+				e.logger.Warn(
+					"xss finding",
+					logging.Fields{
+						"parameter": point.Name,
+						"source":    point.Source,
+					},
+				)
 				findings = append(findings, finding)
 				if err := e.persistFinding(ctx, scanID, finding); err != nil {
+
+					e.logger.Warn(
+						"persist finding failed",
+						logging.Fields{
+							"error": err,
+						},
+					)
+
 					e.logger.Warn("persist finding failed", logging.Fields{"error": err})
 				}
 				break
@@ -197,7 +273,12 @@ func (e *Engine) runXSS(ctx context.Context, scanID int64, points []injectionPoi
 }
 
 func (e *Engine) runSQLi(ctx context.Context, scanID int64, points []injectionPoint, opts Options) ([]Finding, error) {
-	e.logger.Info("running sqli scanner", logging.Fields{"surface": len(points)})
+	e.logger.Info(
+		"running sqli scanner",
+		logging.Fields{
+			"surface": len(points),
+		},
+	)
 	errorPayloads := []string{"'", "\"", "' OR '1'='1"}
 	boolPayloads := []struct {
 		TruePayload  string
@@ -223,6 +304,15 @@ func (e *Engine) runSQLi(ctx context.Context, scanID int64, points []injectionPo
 
 		baseline, err := e.measureLatency(ctx, scanID, point.templateForValue(point.BaseValue), opts.UserAgent, 2)
 		if err != nil {
+			e.logger.Debug(
+				"baseline measurement failed",
+				logging.Fields{
+					"parameter": point.Name,
+					"source":    point.Source,
+					"error":     err,
+				},
+			)
+
 			e.logger.Debug("baseline measurement failed", logging.Fields{"parameter": point.Name, "source": point.Source, "error": err})
 			baseline = 0
 		}
@@ -233,12 +323,21 @@ func (e *Engine) runSQLi(ctx context.Context, scanID int64, points []injectionPo
 			template := point.templateForValue(value)
 
 			evaluator := func(resp *responsePayload) (bool, string) {
+
+			evaluator := func(resp *responsePayload) (bool, string) {
 			result, err := e.sendAndEvaluate(ctx, scanID, template, opts.UserAgent, func(resp *responsePayload) (bool, string) {
 				return detectSQLError(resp, keywords)
 			}
 			result, err := e.sendAndEvaluate(ctx, scanID, template, opts.UserAgent, evaluator)
 			if err != nil {
-				e.logger.Debug("error-based sqli request failed", logging.Fields{"parameter": point.Name, "source": point.Source, "error": err})
+				e.logger.Debug(
+					"error-based sqli request failed",
+					logging.Fields{
+						"parameter": point.Name,
+						"source":    point.Source,
+						"error":     err,
+					},
+				)
 				continue
 			}
 			if result != nil {
@@ -250,10 +349,22 @@ func (e *Engine) runSQLi(ctx context.Context, scanID int64, points []injectionPo
 					Evidence:    result.Evidence,
 					PoC:         buildCurlCommand(template, opts.UserAgent),
 				}
-				e.logger.Warn("sql injection finding", logging.Fields{"parameter": point.Name, "vector": "error", "source": point.Source})
+				e.logger.Warn(
+					"sql injection finding",
+					logging.Fields{
+						"parameter": point.Name,
+						"vector":    "error",
+						"source":    point.Source,
+					},
+				)
 				findings = append(findings, finding)
 				if err := e.persistFinding(ctx, scanID, finding); err != nil {
-					e.logger.Warn("persist finding failed", logging.Fields{"error": err})
+					e.logger.Warn(
+						"persist finding failed",
+						logging.Fields{
+							"error": err,
+						},
+					)
 				}
 				errorDetected = true
 				break
@@ -273,7 +384,14 @@ func (e *Engine) runSQLi(ctx context.Context, scanID int64, points []injectionPo
 
 			trueResp, err := e.execute(ctx, scanID, trueTemplate, opts.UserAgent)
 			if err != nil {
-				e.logger.Debug("boolean true request failed", logging.Fields{"parameter": point.Name, "source": point.Source, "error": err})
+				e.logger.Debug(
+					"boolean true request failed",
+					logging.Fields{
+						"parameter": point.Name,
+						"source":    point.Source,
+						"error":     err,
+					},
+				)
 				continue
 			}
 			if err := waitDelay(ctx, opts.Delay); err != nil {
@@ -281,7 +399,14 @@ func (e *Engine) runSQLi(ctx context.Context, scanID int64, points []injectionPo
 			}
 			falseResp, err := e.execute(ctx, scanID, falseTemplate, opts.UserAgent)
 			if err != nil {
-				e.logger.Debug("boolean false request failed", logging.Fields{"parameter": point.Name, "source": point.Source, "error": err})
+				e.logger.Debug(
+					"boolean false request failed",
+					logging.Fields{
+						"parameter": point.Name,
+						"source":    point.Source,
+						"error":     err,
+					},
+				)
 				continue
 			}
 
@@ -295,10 +420,22 @@ func (e *Engine) runSQLi(ctx context.Context, scanID int64, points []injectionPo
 					Evidence:    evidence,
 					PoC:         strings.Join([]string{buildCurlCommand(trueTemplate, opts.UserAgent), buildCurlCommand(falseTemplate, opts.UserAgent)}, "\n"),
 				}
-				e.logger.Warn("sql injection finding", logging.Fields{"parameter": point.Name, "vector": "boolean", "source": point.Source})
+				e.logger.Warn(
+					"sql injection finding",
+					logging.Fields{
+						"parameter": point.Name,
+						"vector":    "boolean",
+						"source":    point.Source,
+					},
+				)
 				findings = append(findings, finding)
 				if err := e.persistFinding(ctx, scanID, finding); err != nil {
-					e.logger.Warn("persist finding failed", logging.Fields{"error": err})
+					e.logger.Warn(
+						"persist finding failed",
+						logging.Fields{
+							"error": err,
+						},
+					)
 				}
 				booleanDetected = true
 				break
@@ -313,7 +450,14 @@ func (e *Engine) runSQLi(ctx context.Context, scanID int64, points []injectionPo
 			template := point.templateForValue(value)
 			resp, err := e.execute(ctx, scanID, template, opts.UserAgent)
 			if err != nil {
-				e.logger.Debug("time-based request failed", logging.Fields{"parameter": point.Name, "source": point.Source, "error": err})
+				e.logger.Debug(
+					"time-based request failed",
+					logging.Fields{
+						"parameter": point.Name,
+						"source":    point.Source,
+						"error":     err,
+					},
+				)
 				continue
 			}
 			if baseline > 0 && resp.Latency-baseline >= payload.Delay-1*time.Second {
@@ -326,9 +470,23 @@ func (e *Engine) runSQLi(ctx context.Context, scanID int64, points []injectionPo
 					Evidence:    evidence,
 					PoC:         buildCurlCommand(template, opts.UserAgent),
 				}
-				e.logger.Warn("sql injection finding", logging.Fields{"parameter": point.Name, "vector": "time", "source": point.Source, "latency_ms": resp.Latency.Milliseconds()})
+				e.logger.Warn(
+					"sql injection finding",
+					logging.Fields{
+						"parameter":  point.Name,
+						"vector":     "time",
+						"source":     point.Source,
+						"latency_ms": resp.Latency.Milliseconds(),
+					},
+				)
 				findings = append(findings, finding)
 				if err := e.persistFinding(ctx, scanID, finding); err != nil {
+					e.logger.Warn(
+						"persist finding failed",
+						logging.Fields{
+							"error": err,
+						},
+					)
 					e.logger.Warn("persist finding failed", logging.Fields{"error": err})
 				}
 				break
@@ -405,6 +563,81 @@ func (e *Engine) runSSRF(ctx context.Context, scanID int64, points []injectionPo
 	return findings, nil
 }
 
+
+func (e *Engine) runSSRF(ctx context.Context, scanID int64, points []injectionPoint, opts Options) ([]Finding, error) {
+	domain := strings.TrimSpace(opts.OOBDomain)
+	if domain == "" {
+		return nil, nil
+	}
+	e.logger.Info(
+		"running ssrf scanner",
+		logging.Fields{
+			"surface":    len(points),
+			"oob_domain": domain,
+		},
+	)
+	payloads := []string{
+		fmt.Sprintf("http://%s/", domain),
+		fmt.Sprintf("https://%s/", domain),
+	}
+
+	findings := make([]Finding, 0)
+
+	for _, point := range points {
+		if err := ctx.Err(); err != nil {
+			return findings, err
+		}
+
+		for _, payload := range payloads {
+			value := combineWithPayload(point.BaseValue, payload)
+			template := point.templateForValue(value)
+			evaluator := func(resp *responsePayload) (bool, string) {
+				return detectSSRF(resp, domain)
+			}
+			result, err := e.sendAndEvaluate(ctx, scanID, template, opts.UserAgent, evaluator)
+			if err != nil {
+				e.logger.Debug(
+					"ssrf request failed",
+					logging.Fields{
+						"parameter": point.Name,
+						"source":    point.Source,
+						"error":     err,
+					},
+				)
+				continue
+			}
+			if result != nil {
+				finding := Finding{
+					Title:       fmt.Sprintf("Potential SSRF in %s", point.Name),
+					Type:        "ssrf",
+					Severity:    SeverityHigh,
+					Description: fmt.Sprintf("Input referencing %s appears to trigger server-side requests from %s.", domain, point.label()),
+					Evidence:    result.Evidence,
+					PoC:         buildCurlCommand(template, opts.UserAgent),
+				}
+				e.logger.Warn(
+					"ssrf finding",
+					logging.Fields{
+						"parameter": point.Name,
+						"source":    point.Source,
+					},
+				)
+				findings = append(findings, finding)
+				if err := e.persistFinding(ctx, scanID, finding); err != nil {
+					e.logger.Warn(
+						"persist finding failed",
+						logging.Fields{
+							"error": err,
+						},
+					)
+				}
+				break
+			}
+			if err := waitDelay(ctx, opts.Delay); err != nil {
+				return findings, err
+			}
+		}
+	}
 type requestTemplate struct {
 	Method  string
 	URL     string
@@ -431,6 +664,24 @@ type responsePayload struct {
 	Latency    time.Duration
 }
 
+
+type requestTemplate struct {
+	Method  string
+	URL     string
+	Headers http.Header
+	Body    []byte
+}
+
+type responsePayload struct {
+	StatusCode int
+	Headers    http.Header
+	Body       []byte
+	Latency    time.Duration
+}
+
+type evaluationResult struct {
+	Evidence string
+}
 
 type requestTemplate struct {
 	Method  string
@@ -563,7 +814,12 @@ func (e *Engine) enumerateInjectionPoints(ctx context.Context, scanID int64, tar
 		}
 
 		if location == locationBody && strings.Contains(strings.ToLower(form.Enctype), "multipart") {
-			e.logger.Debug("skipping multipart form", logging.Fields{"form": form.Source})
+			e.logger.Debug(
+				"skipping multipart form",
+				logging.Fields{
+					"form": form.Source,
+				},
+			)
 			continue
 		}
 
@@ -656,7 +912,12 @@ func (e *Engine) execute(ctx context.Context, scanID int64, template requestTemp
 
 	reqID, err := e.store.RecordRequest(ctx, scanID, req.Method, req.URL.String(), headerJSON(req.Header), reqBody)
 	if err != nil {
-		e.logger.Debug("failed to persist request", logging.Fields{"error": err})
+		e.logger.Debug(
+			"failed to persist request",
+			logging.Fields{
+				"error": err,
+			},
+		)
 	}
 
 	start := time.Now()
@@ -674,7 +935,12 @@ func (e *Engine) execute(ctx context.Context, scanID int64, template requestTemp
 
 	if reqID != 0 {
 		if _, err := e.store.RecordResponse(ctx, reqID, resp.StatusCode, headerJSON(resp.Header), body, latency); err != nil {
-			e.logger.Debug("failed to persist response", logging.Fields{"error": err})
+			e.logger.Debug(
+				"failed to persist response",
+				logging.Fields{
+					"error": err,
+				},
+			)
 		}
 	}
 
