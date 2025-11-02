@@ -136,6 +136,7 @@ func (e *Engine) Run(ctx context.Context, opts Options) error {
 func (e *Engine) runXSS(ctx context.Context, scanID int64, points []injectionPoint, opts Options) ([]Finding, error) {
 	e.logger.Info("running xss scanner", logging.Fields{"surface": len(points)})
 	payloadList := loadXSSPayloads()
+
 	payloads := loadXSSPayloads()
 	payloads := []string{
 		"<script>alert(1)</script>",
@@ -153,12 +154,19 @@ func (e *Engine) runXSS(ctx context.Context, scanID int64, points []injectionPoi
 
 
 		for _, payload := range payloadList {
+			value := combineWithPayload(point.BaseValue, payload)
+			template := point.templateForValue(value)
+			evaluator := func(resp *responsePayload) (bool, string) {
+
+		for _, payload := range payloadList {
 		for _, payload := range payloads {
 			value := combineWithPayload(point.BaseValue, payload)
 			template := point.templateForValue(value)
 			result, err := e.sendAndEvaluate(ctx, scanID, template, opts.UserAgent, func(resp *responsePayload) (bool, string) {
+
 				return detectXSS(resp, payload)
-			})
+			}
+			result, err := e.sendAndEvaluate(ctx, scanID, template, opts.UserAgent, evaluator)
 			if err != nil {
 				e.logger.Debug("xss request failed", logging.Fields{"parameter": point.Name, "source": point.Source, "error": err})
 				continue
@@ -223,9 +231,12 @@ func (e *Engine) runSQLi(ctx context.Context, scanID int64, points []injectionPo
 		for _, payload := range errorPayloads {
 			value := combineWithPayload(point.BaseValue, payload)
 			template := point.templateForValue(value)
+
+			evaluator := func(resp *responsePayload) (bool, string) {
 			result, err := e.sendAndEvaluate(ctx, scanID, template, opts.UserAgent, func(resp *responsePayload) (bool, string) {
 				return detectSQLError(resp, keywords)
-			})
+			}
+			result, err := e.sendAndEvaluate(ctx, scanID, template, opts.UserAgent, evaluator)
 			if err != nil {
 				e.logger.Debug("error-based sqli request failed", logging.Fields{"parameter": point.Name, "source": point.Source, "error": err})
 				continue
@@ -352,6 +363,15 @@ func (e *Engine) runSSRF(ctx context.Context, scanID int64, points []injectionPo
 		for _, payload := range payloads {
 			value := combineWithPayload(point.BaseValue, payload)
 			template := point.templateForValue(value)
+
+			evaluator := func(resp *responsePayload) (bool, string) {
+				return detectSSRF(resp, domain)
+			}
+			result, err := e.sendAndEvaluate(ctx, scanID, template, opts.UserAgent, evaluator)
+			if err != nil {
+				e.logger.Debug("ssrf request failed", logging.Fields{"parameter": point.Name, "source": point.Source, "error": err})
+				continue
+			}
 			result, err := e.sendAndEvaluate(ctx, scanID, template, opts.UserAgent, func(resp *responsePayload) (bool, string) {
 				return detectSSRF(resp, domain)
 			})
@@ -381,6 +401,7 @@ func (e *Engine) runSSRF(ctx context.Context, scanID int64, points []injectionPo
 		}
 	}
 
+
 	return findings, nil
 }
 
@@ -408,6 +429,25 @@ type responsePayload struct {
 	Headers    http.Header
 	Body       []byte
 	Latency    time.Duration
+}
+
+
+type requestTemplate struct {
+	Method  string
+	URL     string
+	Headers http.Header
+	Body    []byte
+}
+
+type responsePayload struct {
+	StatusCode int
+	Headers    http.Header
+	Body       []byte
+	Latency    time.Duration
+}
+
+type evaluationResult struct {
+	Evidence string
 }
 
 type evaluationResult struct {
