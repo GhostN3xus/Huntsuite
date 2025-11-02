@@ -191,6 +191,7 @@ func runReport(ctx context.Context, logger *logging.Logger, store *sqlite.Store,
 	fs := flag.NewFlagSet("report", flag.ContinueOnError)
 	scanID := fs.Int64("scan-id", 0, "Scan identifier")
 	outputDir := fs.String("output", "", "Output directory for report")
+	format := fs.String("format", "markdown", "Report format (markdown|html|json)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -213,12 +214,26 @@ func runReport(ctx context.Context, logger *logging.Logger, store *sqlite.Store,
 	if dir == "" {
 		dir = filepath.Join(cfg.General.DataDir, "reports")
 	}
-	path, err := report.WriteMarkdownReport(dir, scan, target, findings)
-	if err != nil {
-		return err
+	formatVal := strings.ToLower(strings.TrimSpace(*format))
+	var (
+		path   string
+		genErr error
+	)
+	switch formatVal {
+	case "markdown", "md":
+		path, genErr = report.WriteMarkdownReport(dir, scan, target, findings)
+	case "html":
+		path, genErr = report.WriteHTMLReport(dir, scan, target, findings)
+	case "json":
+		path, genErr = report.WriteJSONScanReport(dir, scan, target, findings)
+	default:
+		return fmt.Errorf("unsupported report format: %s", formatVal)
+	}
+	if genErr != nil {
+		return genErr
 	}
 	fmt.Println("Report saved to", path)
-	logger.Info("report generated", logging.Fields{"path": path})
+	logger.Info("report generated", logging.Fields{"path": path, "format": formatVal})
 	return nil
 }
 

