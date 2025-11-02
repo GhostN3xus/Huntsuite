@@ -1,140 +1,86 @@
-# HuntSuite
-
-HuntSuite é um scaffold escrito em Go para construir uma plataforma de pentest ofensiva. O projeto combina proxy HTTP, enumeração, coleta OOB (out-of-band), geração de relatórios e uma camada simples de validação para findings. O código serve como base extensível: todas as rotinas são deliberadamente simples e funcionam como pontos de partida para integrações mais avançadas.
-
-## Índice rápido
-- [Estrutura do repositório](#estrutura-do-repositório)
-- [Requisitos](#requisitos)
-- [Configuração inicial](#configuração-inicial)
-- [CLI `huntsuite`](#cli-huntsuite)
-- [Visão geral dos pacotes e funções](#visão-geral-dos-pacotes-e-funções)
-- [Wordlists e payloads](#wordlists-e-payloads)
-- [Logs e relatórios](#logs-e-relatórios)
-- [Trabalhando com notificações](#trabalhando-com-notificações)
-- [Próximos passos sugeridos](#próximos-passos-sugeridos)
-
-## Estrutura do repositório
 ```
-.
-├── cmd/huntsuite        # CLI principal e roteamento de subcomandos
-├── pkg/                 # Bibliotecas internas (core, proxy, recon, etc.)
-├── payloads/            # Payloads de teste para fuzzing (SSRF, XSS)
-├── wordlists/           # Wordlists de subdomínios utilizadas no recon
-├── Makefile             # Atalhos para build/clean
-├── go.mod               # Configuração de módulo Go
-└── README.md            # Este guia
+██╗  ██╗██╗   ██╗███╗   ██╗████████╗███████╗██╗   ██╗███████╗████████╗
+██║  ██║██║   ██║████╗  ██║╚══██╔══╝██╔════╝██║   ██║██╔════╝╚══██╔══╝
+███████║██║   ██║██╔██╗ ██║   ██║   █████╗  ██║   ██║█████╗     ██║   
+██╔══██║██║   ██║██║╚██╗██║   ██║   ██╔══╝  ╚██╗ ██╔╝██╔══╝     ██║   
+██║  ██║╚██████╔╝██║ ╚████║   ██║   ███████╗ ╚████╔╝ ███████╗   ██║   
+╚═╝  ╚═╝ ╚═════╝ ╚═╝  ╚═══╝   ╚═╝   ╚══════╝  ╚═══╝  ╚══════╝   ╚═╝   
 ```
 
-## Requisitos
-- Go 1.20 ou superior (necessário para compilar o projeto)
-- Ferramentas opcionais:
-  - [`interactsh-client`](https://github.com/projectdiscovery/interactsh) disponível no `PATH` para OOB real
-  - Persistência local via arquivo JSON (nenhum banco adicional é necessário)
-  - Acesso à Internet para execução de enumeração DNS e crawling
+HuntSuite is an offensive automation engine focused on high-signal reconnaissance and validation. The default scan pipeline runs DNS reconnaissance, structural mapping, sensitive file disclosure probing, and automatic OOB validation (SSRF, Blind XSS, Log4Shell) in sequence. Everything is built to run headless on Linux with Go 1.21+.
 
-## Configuração inicial
-1. **Instale dependências Go** (caso ainda não tenha):
-   ```bash
-   go mod tidy
-   ```
-2. **Compile o binário**:
-   ```bash
-   make build
-   ```
-3. **Explore os subcomandos**:
-   ```bash
-   ./huntsuite --help
-   ./huntsuite <comando> --help
-   ```
-4. **(Opcional) Configure notificações Telegram**: salve um arquivo `~/.huntsuite/config.json` via `pkg/config.Save` ou defina as variáveis `HUNTSUITE_TELEGRAM_TOKEN` e `HUNTSUITE_TELEGRAM_CHAT_ID`.
+## Installation
 
-## CLI `huntsuite`
-O binário `huntsuite` roteia para diferentes subcomandos. Cada subcomando possui flags próprias definidas com `flag.FlagSet` em `cmd/huntsuite/main.go`.
+```bash
+go install github.com/GhostN3xus/Huntsuite@latest
+```
 
-| Comando      | Flags principais | Descrição |
-|--------------|------------------|-----------|
-| `proxy`      | `--listen` (endereço para bind, padrão `:8080`), `--inject` (habilita função de injeção stub) | Inicia proxy forward HTTP/HTTPS com suporte a CONNECT e possibilidade de instrumentar requisições antes do envio. Usa `proxy.StartForwardProxy`.
-| `oob`        | _sem flags_ | Tenta invocar `interactsh-client`; se indisponível, cria stub via `oob.NewInteractClient` e passa a fazer polling de eventos com `PollInteractions`.
-| `recon`      | `--target` (domínio obrigatório), `--wordlist` (opcional) | Enumera subdomínios via `recon.SimpleRecon.EnumSubdomains`. Resultados são persistidos com `report.WriteJSONReport`.
-| `map`        | `--target` (URL obrigatória), `--timeout` (segundos) | Executa crawler limitado ao host inicial por meio de `mapper.SiteMapper.Crawl`.
-| `scan`       | `--target` (URL/domínio obrigatório), `--oob-domain` (domínio customizado), `--disclosure` (habilita sondas de divulgação) | Dispara `core.Engine.Scan` e, opcionalmente, `disclosure.Probe`.
-| `validate`   | `--target` (URL obrigatória), `--param` (nome do parâmetro SSRF), `--db` (arquivo JSON) | Executa validação SSRF com `validator.ProbeSSRF`, persistindo findings em arquivo JSON e em relatórios.
+The resulting binary (`huntsuite`) exposes three primary commands:
 
-Caso nenhum comando seja informado, o programa exibe uso amigável via `usage()`.
+| Command | Description |
+|---------|-------------|
+| `scan`  | Executes the full engine (recon → mapper → disclosure → validators) with a fixed worker pool (default 50) and a 10 minute global timeout. Findings are appended to `~/.huntsuite/findings.json` with file locking. |
+| `recon` | Performs wordlist-based subdomain enumeration with wildcard detection and writes the result set to stdout or an optional file. |
+| `validate` | Fires an OOB-backed SSRF probe against a single target URL and stores confirmed interactions. |
 
-## Visão geral dos pacotes e funções
-A tabela abaixo lista todas as funções expostas no projeto, agrupadas por pacote. Funções não-exportadas relevantes também estão incluídas para facilitar extensão.
+### Examples
 
-### `cmd/huntsuite`
-- `main()` — analisa argumentos e roteia para os subcomandos acima.
-- `usage()` — imprime ajuda básica quando argumentos são inválidos.
+```bash
+huntsuite scan -t example.com -w 100 -o findings.json
+huntsuite recon -t example.com -o subs.txt
+huntsuite validate -t https://sub.example.com --oob
+```
 
-### `pkg/config`
-- `Save(cfg *Config) error` — persiste arquivo `config.json` em `~/.huntsuite/` com permissões restritivas.
-- `Load() (*Config, error)` — carrega o arquivo de configuração; retorna instância vazia se não existir.
+### Global Flags
 
-### `pkg/core`
-- `NewEngine() *Engine` — constrói instância da estrutura de orquestração.
-- `(*Engine).Scan(target, oobDomain string)` — fluxo principal de scan; atualmente registra logs simulando etapas e gera mensagem final com nome do relatório.
+* `-t` / `--target` — primary target (domain or URL).
+* `-w` — number of workers for the scan pipeline.
+* `-o` — custom output path (defaults to `~/.huntsuite/findings.json`).
+* `-q` — quiet mode (logs suppressed, errors still emitted).
+* `--timeout` — overrides the 10 minute global scan timeout.
+* `--oob` — toggle OOB validation when using the `validate` command.
 
-### `pkg/disclosure`
-- `WriteReport(outdir string, findings []Finding)` — serializa findings de disclosure em JSON dentro de `outdir` (padrão `reports/`).
-- `Probe(target string, timeoutSeconds int) []Finding` — verifica arquivos sensíveis (`/.env`, `/.git/config`, etc.), coletando trechos e status HTTP.
-- `min(a, b int) int` — função auxiliar para limitar tamanho de snippets.
+## Architecture Overview
 
-### `pkg/logging`
-- `Log(component, level, message string)` — escreve logs em JSON na saída padrão e em `logs/huntsuite.log`.
+* **Recon:** `pkg/recon` embeds a bundled subdomain wordlist (`pkg/recon/wordlists/subdomains.txt`), resolves entries with a custom DNS resolver, and filters wildcard responses by testing three random subdomains per run.
+* **Mapper:** `pkg/mapper` relies on a lightweight, gocolly-compatible crawler (bundled under `third_party/gocolly`) with depth 3 and a hard cap of 500 unique pages, constrained to the base domain.
+* **Disclosure:** `pkg/disclosure` aggressively hits 30+ high-value paths with a dedicated HTTP client (`huntsuite/1.0` user agent, 8s timeout, 2× retry backoff) and writes reports into `~/.huntsuite/`.
+* **Validators & OOB:** `pkg/validator` integrates with a vendored Interactsh client (`third_party/interactsh/pkg/client`). Each scan session generates a unique subdomain, polls until timeout or 100 interactions, and classifies tokens (`ssrf-*`, `bxss-*`, `log4j-*`) to confirm findings automatically while persisting JSON lines with a `sync.Mutex`.
+* **Engine:** `pkg/core` orchestrates the full pipeline with a fixed worker pool (50 workers by default) and structured JSON logging to stdout. Results are appended to `~/.huntsuite/findings.json` and all network stages respect the global timeout window.
 
-### `pkg/mapper`
-- `NewSiteMapper() *SiteMapper` — fábrica para o crawler.
-- `(*SiteMapper).Crawl(start string, timeout time.Duration)` — varre links internos a partir de `start`, respeitando `timeout` para requisições HTTP e expandindo somente URLs do mesmo host.
-- `handleConnect`? (não neste pacote; ver `pkg/proxy`).
+## Development
 
-### `pkg/notify`
-- `SendMessage(botToken, chatID, text string) error` — envia mensagem simples via Telegram Bot API (`sendMessage`).
-- `SendDocument(botToken, chatID, filePath, caption string) error` — faz upload de arquivo como documento via multipart para o chat especificado.
-- `AutoNotify(reportPath, summary string) error` — tenta descobrir credenciais (variáveis de ambiente ou `pkg/config.Load`) e dispara `SendMessage`/`SendDocument` quando disponíveis.
+### Prerequisites
 
-### `pkg/oob`
-- `NewInteractClient() (*InteractClient, error)` — gera domínio stub OOB e retorna cliente para polling.
-- `(*InteractClient).PollInteractions(ctx context.Context)` — laço simples que simula polling de interações a cada 5 segundos.
-- `ExecInteract(ctx context.Context) (string, error)` — procura por binários `interactsh-client`/`interactsh`, executa com `-silent` e retorna domínio emitido.
-- `ExecInteractWithTimeout(timeout time.Duration) (string, error)` — helper que invoca `ExecInteract` com `context.WithTimeout`.
+* Go 1.21+
+* Linux x86_64 environment
 
-### `pkg/proxy`
-- `StartForwardProxy(cfg ProxyConfig) error` — inicia servidor HTTP que atua como forward proxy, com logs e hook para injetar payloads.
-- `handleConnect(w http.ResponseWriter, r *http.Request)` — (não exportada) implementa túnel TCP para requisições `CONNECT`.
+### Running Tests
 
-### `pkg/recon`
-- `NewSimpleRecon() *SimpleRecon` — fábrica do enumerador.
-- `(*SimpleRecon).EnumSubdomains(domain, wordlistPath string, timeoutSeconds int) []string` — resolve subdomínios presentes na wordlist informada (ou default do projeto) e retorna hosts válidos.
+```bash
+go test ./...
+```
 
-### `pkg/report`
-- `WriteJSONReport(prefix string, data interface{}) string` — grava artefato JSON com timestamp em `reports/` e dispara `notify.AutoNotify` em goroutine.
+The suite includes mocks for DNS, HTTP, and the OOB client so the tests are deterministic and network-free.
 
-### `pkg/validator`
-- `InitDB(path string) (*Storage, error)` — prepara arquivo JSON para armazenar findings e calcula o último ID utilizado.
-- `SaveFinding(store *Storage, f Finding) (int64, error)` — adiciona finding ao arquivo JSON e retorna o ID atribuído.
-- `ProbeSSRF(store *Storage, target, param string) (*Finding, error)` — gera payload SSRF com domínio OOB, envia requisição, salva finding no JSON e reporta resultado em arquivo.
+### Building the Binary
 
-## Wordlists e payloads
-- `wordlists/subdomains.txt` — lista de subdomínios base utilizada por `pkg/recon`. Substitua ou expanda conforme necessário.
-- `payloads/ssrf.txt`, `payloads/xss.txt` — exemplos de payloads que podem alimentar fuzzers ou o proxy (não utilizados automaticamente).
+```bash
+go build ./cmd/huntsuite
+```
 
-## Logs e relatórios
-- **Relatórios JSON**: gerados em `reports/` por `pkg/report` e `pkg/disclosure`. Cada arquivo leva timestamp no nome.
-- **Logs estruturados**: o pacote `pkg/logging` grava eventos em `logs/huntsuite.log` no formato JSON. O proxy, mapper e demais componentes também usam `log.Printf` para diagnósticos imediatos.
+For release builds matching the acceptance checklist:
 
-## Trabalhando com notificações
-1. Defina `HUNTSUITE_TELEGRAM_TOKEN` e `HUNTSUITE_TELEGRAM_CHAT_ID`, ou salve o arquivo de configuração com `pkg/config.Save`.
-2. Ao gerar um relatório (`report.WriteJSONReport` ou `disclosure.WriteReport`), `pkg/notify.AutoNotify` tentará enviar resumo e arquivo automaticamente.
-3. Utilize `notify.SendMessage`/`notify.SendDocument` diretamente em integrações personalizadas quando desejar granularidade maior.
+```bash
+go build -ldflags="-s -w" -o huntsuite ./cmd/huntsuite
+```
 
-## Próximos passos sugeridos
-O scaffold inclui pontos para evolução imediata:
-- Integrar clientes reais (Interactsh, Subfinder/Amass, Chromedp) e mover lógicas de stub para implementações completas.
-- Adicionar testes automatizados para cada pacote e configurar pipeline CI/CD.
-- Evoluir proxy para MITM com geração de CA e interceptação TLS.
-- Persistir resultados em banco e construir UI para revisão manual dos findings.
-- Expandir biblioteca de validações automáticas (XSS, SQLi, SSRF com comprovação OOB).
+### Key Outputs
 
+* Logs (JSON) stream to stdout by default (`-q` to silence informational events).
+* Findings are appended to `~/.huntsuite/findings.json` (newline-delimited JSON, locked per write).
+* Disclosure artifacts are written to `~/.huntsuite/` with timestamped filenames.
+
+---
+
+Use HuntSuite responsibly. Offensive testing must only target assets you own or have explicit permission to assess.

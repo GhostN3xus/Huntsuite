@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"huntsuite/pkg/config"
+	"github.com/GhostN3xus/Huntsuite/pkg/config"
 )
 
 type Level int
