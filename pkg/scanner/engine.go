@@ -136,6 +136,12 @@ func (e *Engine) Run(ctx context.Context, opts Options) error {
 func (e *Engine) runXSS(ctx context.Context, scanID int64, points []injectionPoint, opts Options) ([]Finding, error) {
 	e.logger.Info("running xss scanner", logging.Fields{"surface": len(points)})
 	payloads := loadXSSPayloads()
+	payloads := []string{
+		"<script>alert(1)</script>",
+		"\"'><script>alert('huntsuite')</script>",
+		"<img src=x onerror=alert(1)>",
+		"<svg/onload=alert(1)>",
+	}
 
 	findings := make([]Finding, 0)
 
