@@ -274,6 +274,7 @@ func (e *Engine) Run(ctx context.Context, opts Options) error {
 	return nil
 }
 
+
 func (e *Engine) resolveTarget(ctx context.Context, target *url.URL, opts Options) (*url.URL, error) {
 	if target == nil {
 		return nil, fmt.Errorf("engine: nil target")
@@ -354,6 +355,7 @@ func (e *Engine) resolveTarget(ctx context.Context, target *url.URL, opts Option
 	return nil, fmt.Errorf("engine: too many redirects for %s", target.String())
 }
 
+
 func (e *Engine) injectionSurface(ctx context.Context, scanID int64, target *url.URL, opts Options) ([]injectionPoint, error) {
 	if points, ok := injectionPointsFromContext(ctx); ok {
 		return points, nil
@@ -381,7 +383,9 @@ func (e *Engine) runXSS(ctx context.Context, scanID int64, target *url.URL, opts
 			value := combineWithPayload(point.BaseValue, payload)
 			reqTemplate := point.templateForValue(value)
 
+
 			result, err := e.sendAndEvaluate(ctx, scanID, reqTemplate, opts.UserAgent, opts.Headers, func(resp *responsePayload) (bool, string) {
+			result, err := e.sendAndEvaluate(ctx, scanID, reqTemplate, opts.UserAgent, func(resp *responsePayload) (bool, string) {
 				return detectXSS(resp, payload)
 			})
 
@@ -517,7 +521,9 @@ func (e *Engine) runSQLi(ctx context.Context, scanID int64, target *url.URL, opt
 				return findings, err
 			}
 
+
 			falseResp, err := e.execute(ctx, scanID, falseTemplate, opts.UserAgent, opts.Headers)
+			falseResp, err := e.execute(ctx, scanID, falseTemplate, opts.UserAgent)
 			if err != nil {
 				e.logger.Debug("boolean false request failed", logging.Fields{
 					"parameter": point.Name,
@@ -631,7 +637,9 @@ func (e *Engine) runSSRF(ctx context.Context, scanID int64, target *url.URL, opt
 			value := combineWithPayload(point.BaseValue, payload)
 			reqTemplate := point.templateForValue(value)
 
+
 			result, err := e.sendAndEvaluate(ctx, scanID, reqTemplate, opts.UserAgent, opts.Headers, func(resp *responsePayload) (bool, string) {
+			result, err := e.sendAndEvaluate(ctx, scanID, reqTemplate, opts.UserAgent, func(resp *responsePayload) (bool, string) {
 				return detectSSRF(resp, domain)
 			})
 
