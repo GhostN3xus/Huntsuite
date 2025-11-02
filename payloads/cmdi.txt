@@ -1,0 +1,6 @@
+# Command injection payloads (reserved for future scanners)
+;id
+| whoami
+$(id)
+`id`
+$(sleep 5)

