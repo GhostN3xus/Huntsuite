@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/GhostN3xus/Huntsuite/pkg/modules"
 	"github.com/GhostN3xus/Huntsuite/pkg/scanner"
 	"github.com/GhostN3xus/Huntsuite/pkg/storage/sqlite"
 	"github.com/spf13/cobra"
@@ -55,7 +56,7 @@ var scanCmd = &cobra.Command{
 			Transport: transport,
 		}
 
-		engine := scanner.NewEngine(store, logger, localClient)
+		engine := scanner.NewEngine(store, logger, localClient, modules.Registry)
 
 		combinedHeaders := http.Header{}
 		for k, v := range cfg.Scanning.Headers {
