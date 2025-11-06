@@ -17,6 +17,7 @@ import (
 	"github.com/GhostN3xus/Huntsuite/pkg/config"
 	"github.com/GhostN3xus/Huntsuite/pkg/logging"
 	"github.com/GhostN3xus/Huntsuite/pkg/output"
+	"github.com/GhostN3xus/Huntsuite/pkg/recon"
 	"github.com/GhostN3xus/Huntsuite/pkg/report"
 	pkgRuntime "github.com/GhostN3xus/Huntsuite/pkg/runtime"
 	"github.com/GhostN3xus/Huntsuite/pkg/scanner"
@@ -229,35 +230,43 @@ func runScan(ctx context.Context, logger *logging.Logger, store *sqlite.Store, c
 	})
 
 	opts := scanner.Options{
-		Target:           fullTarget,
-		OOBDomain:        *oobDomain,
-		EnableXSS:        enabled["xss"],
-		EnableSQLi:       enabled["sqli"],
-		EnableSSRF:       enabled["ssrf"],
-		EnableLFI:        enabled["lfi"],
-		EnableXXE:        enabled["xxe"],
-		EnableCMDI:       enabled["cmdi"],
+		Target:             fullTarget,
+		OOBDomain:          *oobDomain,
+		EnableXSS:          enabled["xss"],
+		EnableSQLi:         enabled["sqli"],
+		EnableSSRF:         enabled["ssrf"],
+		EnableLFI:          enabled["lfi"],
+		EnableXXE:          enabled["xxe"],
+		EnableCMDI:         enabled["cmdi"],
 		EnableOpenRedirect: enabled["open-redirect"],
-		Timeout:          localClient.Timeout,
-		UserAgent:        cfg.Scanning.UserAgent,
-		Delay:            *delay,
-		Headers:          cloneHTTPHeader(combinedHeaders),
-		Threads:          *threads,
+		Timeout:            localClient.Timeout,
+		UserAgent:          cfg.Scanning.UserAgent,
+		Delay:              *delay,
+		Headers:            cloneHTTPHeader(combinedHeaders),
+		Threads:            *threads,
 	}
 
-	if err := engine.Run(ctx, opts); err != nil {
+	scanID, err := engine.Run(ctx, opts)
+	if err != nil {
 		logger.Error("scan failed", logging.Fields{"error": err})
 		return err
 	}
 
-	logger.Info("scan completed", logging.Fields{})
+	logger.Info("scan completed", logging.Fields{"scan_id": scanID})
 
 	// Export findings if output specified
 	if *output != "" {
-		// TODO: Implement findings export
-		// For now, we just log that export was requested
-		logger.Info("findings export requested", logging.Fields{"path": *output})
-		logger.Warn("findings export not yet implemented", logging.Fields{})
+		logger.Info("exporting findings", logging.Fields{"path": *output, "scan_id": scanID})
+		findings, err := store.FindingsByScan(ctx, scanID)
+		if err != nil {
+			logger.Error("failed to retrieve findings", logging.Fields{"error": err})
+			return err
+		}
+		if err := exportFindings(*output, findings); err != nil {
+			logger.Error("failed to export findings", logging.Fields{"error": err, "path": *output})
+			return err
+		}
+		logger.Info("findings exported successfully", logging.Fields{"count": len(findings), "path": *output})
 	}
 
 	return nil
@@ -445,8 +454,48 @@ func runRecon(ctx context.Context, logger *logging.Logger, store *sqlite.Store, 
 
 	logger.Info("reconnaissance starting", logging.Fields{"domain": *domain, "threads": *threads})
 
-	// TODO: Implement reconnaissance module
-	fmt.Printf("Recon for %s not yet fully implemented\n", *domain)
+	// Create recon engine
+	reconEngine := recon.NewSimpleRecon()
+
+	// Run subdomain enumeration with 2 minute timeout
+	subdomains := reconEngine.EnumSubdomains(*domain, *wordlist, 120)
+
+	logger.Info("reconnaissance completed", logging.Fields{
+		"domain":     *domain,
+		"subdomains": len(subdomains),
+	})
+
+	// Output results
+	if len(subdomains) == 0 {
+		logger.Warn("no subdomains discovered", logging.Fields{})
+		fmt.Println("No subdomains discovered")
+		return nil
+	}
+
+	// Print to console
+	fmt.Printf("\nDiscovered %d subdomains for %s:\n", len(subdomains), *domain)
+	for _, sub := range subdomains {
+		fmt.Printf("  - %s\n", sub)
+	}
+
+	// Export to file if specified
+	if *output != "" {
+		logger.Info("exporting subdomains to file", logging.Fields{"path": *output})
+		file, err := os.Create(*output)
+		if err != nil {
+			logger.Error("failed to create output file", logging.Fields{"error": err})
+			return err
+		}
+		defer file.Close()
+
+		for _, sub := range subdomains {
+			if _, err := fmt.Fprintln(file, sub); err != nil {
+				logger.Error("failed to write subdomain", logging.Fields{"error": err})
+				return err
+			}
+		}
+		logger.Info("subdomains exported successfully", logging.Fields{"count": len(subdomains), "path": *output})
+	}
 
 	return nil
 }
@@ -538,6 +587,5 @@ Report Command:
     --format <type>        Report format: markdown, html, json (default: markdown)
     --output <directory>   Output directory for report
 
-For more information, visit: https://github.com/GhostN3xus/Huntsuite
-`)
+For more information, visit: https://github.com/GhostN3xus/Huntsuite`)
 }

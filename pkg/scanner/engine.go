@@ -203,10 +203,10 @@ func NewEngine(store *sqlite.Store, logger *logging.Logger, httpClient *http.Cli
 }
 
 // Run executes the configured scanners against the supplied target.
-func (e *Engine) Run(ctx context.Context, opts Options) error {
+func (e *Engine) Run(ctx context.Context, opts Options) (int64, error) {
 	parsed, err := url.Parse(opts.Target)
 	if err != nil {
-		return fmt.Errorf("engine: invalid target: %w", err)
+		return 0, fmt.Errorf("engine: invalid target: %w", err)
 	}
 	if parsed.Scheme == "" {
 		parsed.Scheme = "https"
@@ -214,18 +214,18 @@ func (e *Engine) Run(ctx context.Context, opts Options) error {
 
 	resolved, err := e.resolveTarget(ctx, parsed, opts)
 	if err != nil {
-		return fmt.Errorf("engine: resolve target: %w", err)
+		return 0, fmt.Errorf("engine: resolve target: %w", err)
 	}
 	parsed = resolved
 
 	targetID, err := e.store.UpsertTarget(ctx, parsed.Host, "")
 	if err != nil {
-		return fmt.Errorf("engine: persist target: %w", err)
+		return 0, fmt.Errorf("engine: persist target: %w", err)
 	}
 
 	scanID, err := e.store.CreateScan(ctx, targetID, "running", fmt.Sprintf("xss=%t,sqli=%t,ssrf=%t", opts.EnableXSS, opts.EnableSQLi, opts.EnableSSRF))
 	if err != nil {
-		return fmt.Errorf("engine: create scan: %w", err)
+		return 0, fmt.Errorf("engine: create scan: %w", err)
 	}
 	defer func() {
 		_ = e.store.UpdateScanStatus(context.Background(), scanID, "completed", "Scan finished", true)
@@ -235,7 +235,7 @@ func (e *Engine) Run(ctx context.Context, opts Options) error {
 
 	injectionPoints, err := e.enumerateInjectionPoints(ctx, scanID, parsed, opts)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	e.logger.Info("injection surface enumerated", logging.Fields{"points": len(injectionPoints)})
 
@@ -317,9 +317,8 @@ func (e *Engine) Run(ctx context.Context, opts Options) error {
 	}
 
 	e.logger.Info("scan completed", logging.Fields{"scan_id": scanID, "total_findings": len(findings)})
-	return nil
+	return scanID, nil
 }
-
 
 func (e *Engine) resolveTarget(ctx context.Context, target *url.URL, opts Options) (*url.URL, error) {
 	if target == nil {
@@ -400,7 +399,6 @@ func (e *Engine) resolveTarget(ctx context.Context, target *url.URL, opts Option
 
 	return nil, fmt.Errorf("engine: too many redirects for %s", target.String())
 }
-
 
 func (e *Engine) injectionSurface(ctx context.Context, scanID int64, target *url.URL, opts Options) ([]injectionPoint, error) {
 	if points, ok := injectionPointsFromContext(ctx); ok {
@@ -565,7 +563,6 @@ func (e *Engine) runSQLi(ctx context.Context, scanID int64, target *url.URL, opt
 				return findings, err
 			}
 
-
 			falseResp, err := e.execute(ctx, scanID, falseTemplate, opts.UserAgent, opts.Headers)
 			if err != nil {
 				e.logger.Debug("boolean false request failed", logging.Fields{
@@ -679,7 +676,6 @@ func (e *Engine) runSSRF(ctx context.Context, scanID int64, target *url.URL, opt
 			payload := materialisePayload(tpl, map[string]string{"OOB": domain})
 			value := combineWithPayload(point.BaseValue, payload)
 			reqTemplate := point.templateForValue(value)
-
 
 			result, err := e.sendAndEvaluate(ctx, scanID, reqTemplate, opts.UserAgent, opts.Headers, func(resp *responsePayload) (bool, string) {
 				return detectSSRF(resp, domain)
