@@ -37,9 +37,15 @@ func NewSimpleRecon() *SimpleRecon {
 
 // WithResolver returns a copy of the recon engine using the provided resolver.
 func (r *SimpleRecon) WithResolver(resolver DNSResolver) *SimpleRecon {
-	clone := *r
-	clone.resolver = resolver
-	return &clone
+	r.mu.Lock()
+	wordlistCopy := make([]string, len(r.wordlist))
+	copy(wordlistCopy, r.wordlist)
+	r.mu.Unlock()
+
+	return &SimpleRecon{
+		resolver: resolver,
+		wordlist: wordlistCopy,
+	}
 }
 
 // EnumSubdomains enumerates resolvable subdomains for the provided domain.

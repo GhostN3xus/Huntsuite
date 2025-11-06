@@ -10,25 +10,25 @@ import (
 
 // ProgressBar represents a progress tracking system for scans
 type ProgressBar struct {
-	mu           sync.Mutex
-	writer       io.Writer
-	total        int
-	current      int
-	description  string
-	startTime    time.Time
-	width        int
-	color        bool
-	enabled      bool
-	lastLine     string
-	stats        ProgressStats
+	mu          sync.Mutex
+	writer      io.Writer
+	total       int
+	current     int
+	description string
+	startTime   time.Time
+	width       int
+	color       bool
+	enabled     bool
+	lastLine    string
+	stats       ProgressStats
 }
 
 // ProgressStats holds statistics for the progress bar
 type ProgressStats struct {
-	RequestsSent     int
-	FindingsFound    int
+	RequestsSent      int
+	FindingsFound     int
 	ErrorsEncountered int
-	CurrentModule    string
+	CurrentModule     string
 }
 
 // NewProgressBar creates a new progress bar
