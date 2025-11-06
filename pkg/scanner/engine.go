@@ -24,10 +24,11 @@ const maxResponseBodyBytes = 2 * 1024 * 1024
 
 // Engine coordena a execução de scanners e persistência.
 type Engine struct {
-	client   *http.Client
-	store    *sqlite.Store
-	logger   *logging.Logger
-	registry *modules.ModuleRegistry
+	client            *http.Client
+	store             *sqlite.Store
+	logger            *logging.Logger
+	registry          *modules.ModuleRegistry
+	validatorMappings map[string]modules.VulnerabilityValidator
 }
 
 // Options define o comportamento em tempo de execução para o mecanismo de varredura.
@@ -202,7 +203,26 @@ func injectionPointsFromContext(ctx context.Context) ([]injectionPoint, bool) {
 
 // NewEngine cria um novo mecanismo de varredura.
 func NewEngine(store *sqlite.Store, logger *logging.Logger, httpClient *http.Client, registry *modules.ModuleRegistry) *Engine {
-	return &Engine{store: store, logger: logger, client: httpClient, registry: registry}
+	mappings := make(map[string]modules.VulnerabilityValidator)
+	if v, ok := registry.GetVulnerabilityValidator("ssrf_validator"); ok {
+		mappings["SSRF"] = v
+	}
+	if v, ok := registry.GetVulnerabilityValidator("sqli_validator"); ok {
+		mappings["SQLi"] = v
+	}
+	if v, ok := registry.GetVulnerabilityValidator("lfi_validator"); ok {
+		mappings["LFI"] = v
+	}
+	if v, ok := registry.GetVulnerabilityValidator("xxe_validator"); ok {
+		mappings["XXE"] = v
+	}
+	if v, ok := registry.GetVulnerabilityValidator("cmdi_validator"); ok {
+		mappings["CMDI"] = v
+	}
+	if v, ok := registry.GetVulnerabilityValidator("open_redirect_validator"); ok {
+		mappings["Open Redirect"] = v
+	}
+	return &Engine{store: store, logger: logger, client: httpClient, registry: registry, validatorMappings: mappings}
 }
 
 // Run executa os scanners configurados no alvo fornecido.
@@ -274,7 +294,7 @@ func (e *Engine) Run(ctx context.Context, opts Options) (int64, error) {
 					continue
 				}
 
-				for _, validator := range e.registry.VulnerabilityValidators {
+				if validator, ok := e.validatorMappings[payload.Type]; ok {
 					valid, err := validator.Validate(&modules.ResponsePayload{
 						StatusCode: resp.StatusCode,
 						Headers:    resp.Headers,
