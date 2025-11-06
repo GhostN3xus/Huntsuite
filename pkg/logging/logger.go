@@ -185,15 +185,73 @@ func (l *Logger) log(level Level, msg string, fields Fields) {
 func (l *Logger) printConsole(level Level, msg string, fields Fields) {
 	l.core.mu.Lock()
 	defer l.core.mu.Unlock()
+
 	color := levelColor(level, l.core.color)
+	icon := levelIcon(level)
 	reset := ""
+	bold := ""
+	dim := ""
+
 	if l.core.color {
 		reset = "\033[0m"
+		bold = "\033[1m"
+		dim = "\033[2m"
 	}
-	fieldStr := formatFields(fields)
-	fmt.Fprintf(l.core.console, "%s[%s] %s%s %s\n", color, time.Now().Format("15:04:05"), level.Short(), reset, msg)
-	if fieldStr != "" {
-		fmt.Fprintf(l.core.console, "    %s\n", fieldStr)
+
+	timestamp := dim + time.Now().Format("15:04:05") + reset
+	levelTag := color + bold + "[" + level.Short() + "]" + reset
+
+	// Special formatting for findings
+	if severity, ok := fields["severity"]; ok {
+		severityColor := getSeverityColor(fmt.Sprint(severity), l.core.color)
+		severityIcon := getSeverityIcon(fmt.Sprint(severity))
+
+		fmt.Fprintf(l.core.console, "%s %s %s %s%s%s\n",
+			timestamp,
+			severityColor+severityIcon+reset,
+			severityColor+"["+strings.ToUpper(fmt.Sprint(severity))+"]"+reset,
+			bold, msg, reset)
+
+		// Print fields in organized manner
+		if findingType, ok := fields["type"]; ok {
+			fmt.Fprintf(l.core.console, "  %s└─%s Type:%s %s\n", dim, reset, bold, findingType)
+		}
+		if target, ok := fields["target"]; ok {
+			fmt.Fprintf(l.core.console, "  %s└─%s Target:%s %s\n", dim, reset, bold, target)
+		}
+		if evidence, ok := fields["evidence"]; ok {
+			evidenceStr := fmt.Sprint(evidence)
+			if len(evidenceStr) > 100 {
+				evidenceStr = evidenceStr[:97] + "..."
+			}
+			fmt.Fprintf(l.core.console, "  %s└─%s Evidence:%s %s\n", dim, reset, reset, evidenceStr)
+		}
+	} else {
+		// Normal log formatting
+		fmt.Fprintf(l.core.console, "%s %s %s %s\n", timestamp, icon, levelTag, msg)
+
+		// Print fields in a more organized way
+		if len(fields) > 0 {
+			keys := make([]string, 0, len(fields))
+			for k := range fields {
+				keys = append(keys, k)
+			}
+			sort.Strings(keys)
+
+			for i, k := range keys {
+				connector := "├─"
+				if i == len(keys)-1 {
+					connector = "└─"
+				}
+				value := fields[k]
+				valueStr := fmt.Sprint(value)
+				if len(valueStr) > 80 {
+					valueStr = valueStr[:77] + "..."
+				}
+				fmt.Fprintf(l.core.console, "  %s%s%s %s%s:%s %s\n",
+					dim, connector, reset, color, k, reset, valueStr)
+			}
+		}
 	}
 }
 
@@ -324,5 +382,57 @@ func (l Level) Short() string {
 		return "FTL"
 	default:
 		return "INF"
+	}
+}
+
+func levelIcon(level Level) string {
+	switch level {
+	case LevelDebug:
+		return "🔍"
+	case LevelInfo:
+		return "ℹ️ "
+	case LevelWarn:
+		return "⚠️ "
+	case LevelError, LevelFatal:
+		return "❌"
+	default:
+		return "•"
+	}
+}
+
+func getSeverityColor(severity string, enabled bool) string {
+	if !enabled {
+		return ""
+	}
+	switch strings.ToLower(severity) {
+	case "critical":
+		return "\033[1;35m" // Bold magenta
+	case "high":
+		return "\033[1;31m" // Bold red
+	case "medium":
+		return "\033[1;33m" // Bold yellow
+	case "low":
+		return "\033[1;36m" // Bold cyan
+	case "info":
+		return "\033[1;34m" // Bold blue
+	default:
+		return "\033[37m" // White
+	}
+}
+
+func getSeverityIcon(severity string) string {
+	switch strings.ToLower(severity) {
+	case "critical":
+		return "🔥"
+	case "high":
+		return "🚨"
+	case "medium":
+		return "⚡"
+	case "low":
+		return "💡"
+	case "info":
+		return "📌"
+	default:
+		return "•"
 	}
 }

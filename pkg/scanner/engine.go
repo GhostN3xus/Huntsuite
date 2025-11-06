@@ -29,15 +29,20 @@ type Engine struct {
 
 // Options defines runtime behaviour for the scan engine.
 type Options struct {
-	Target     string
-	OOBDomain  string
-	EnableXSS  bool
-	EnableSQLi bool
-	EnableSSRF bool
-	Timeout    time.Duration
-	UserAgent  string
-	Delay      time.Duration
-	Headers    http.Header
+	Target             string
+	OOBDomain          string
+	EnableXSS          bool
+	EnableSQLi         bool
+	EnableSSRF         bool
+	EnableLFI          bool
+	EnableXXE          bool
+	EnableCMDI         bool
+	EnableOpenRedirect bool
+	Timeout            time.Duration
+	UserAgent          string
+	Delay              time.Duration
+	Headers            http.Header
+	Threads            int
 }
 
 // FindingSeverity enumerates severity levels.
@@ -238,30 +243,71 @@ func (e *Engine) Run(ctx context.Context, opts Options) error {
 
 	var findings []Finding
 
+	// Run XSS Scanner
 	if opts.EnableXSS {
+		e.logger.Info("running XSS scanner", logging.Fields{})
 		xssFindings, err := e.runXSS(ctx, scanID, parsed, opts)
 		if err != nil {
 			e.logger.Error("xss scanner failed", logging.Fields{"error": err})
 		} else {
 			findings = append(findings, xssFindings...)
+			e.logger.Info("XSS scan completed", logging.Fields{"findings": len(xssFindings)})
 		}
 	}
 
+	// Run SQLi Scanner
 	if opts.EnableSQLi {
+		e.logger.Info("running SQLi scanner", logging.Fields{})
 		sqliFindings, err := e.runSQLi(ctx, scanID, parsed, opts)
 		if err != nil {
 			e.logger.Error("sqli scanner failed", logging.Fields{"error": err})
 		} else {
 			findings = append(findings, sqliFindings...)
+			e.logger.Info("SQLi scan completed", logging.Fields{"findings": len(sqliFindings)})
 		}
 	}
 
+	// Run SSRF Scanner
 	if opts.EnableSSRF {
+		e.logger.Info("running SSRF scanner", logging.Fields{})
 		ssrfFindings, err := e.runSSRF(ctx, scanID, parsed, opts)
 		if err != nil {
 			e.logger.Error("ssrf scanner failed", logging.Fields{"error": err})
 		} else {
 			findings = append(findings, ssrfFindings...)
+			e.logger.Info("SSRF scan completed", logging.Fields{"findings": len(ssrfFindings)})
+		}
+	}
+
+	// Run LFI/Path Traversal Scanner
+	if opts.EnableLFI {
+		e.logger.Info("running LFI/Path Traversal scanner", logging.Fields{})
+		if err := e.scanLFI(ctx, opts.Target, injectionPoints, opts); err != nil {
+			e.logger.Error("LFI scanner failed", logging.Fields{"error": err})
+		}
+	}
+
+	// Run Command Injection Scanner
+	if opts.EnableCMDI {
+		e.logger.Info("running Command Injection scanner", logging.Fields{})
+		if err := e.scanCMDI(ctx, opts.Target, injectionPoints, opts); err != nil {
+			e.logger.Error("Command Injection scanner failed", logging.Fields{"error": err})
+		}
+	}
+
+	// Run XXE Scanner
+	if opts.EnableXXE {
+		e.logger.Info("running XXE scanner", logging.Fields{})
+		if err := e.scanXXE(ctx, opts.Target, injectionPoints, opts); err != nil {
+			e.logger.Error("XXE scanner failed", logging.Fields{"error": err})
+		}
+	}
+
+	// Run Open Redirect Scanner
+	if opts.EnableOpenRedirect {
+		e.logger.Info("running Open Redirect scanner", logging.Fields{})
+		if err := e.scanOpenRedirect(ctx, opts.Target, injectionPoints, opts); err != nil {
+			e.logger.Error("Open Redirect scanner failed", logging.Fields{"error": err})
 		}
 	}
 
@@ -270,7 +316,7 @@ func (e *Engine) Run(ctx context.Context, opts Options) error {
 		e.logger.Warn("failed to update scan status", logging.Fields{"error": err})
 	}
 
-	e.logger.Info("scan completed", logging.Fields{"scan_id": scanID, "findings": len(findings)})
+	e.logger.Info("scan completed", logging.Fields{"scan_id": scanID, "total_findings": len(findings)})
 	return nil
 }
 
@@ -383,9 +429,7 @@ func (e *Engine) runXSS(ctx context.Context, scanID int64, target *url.URL, opts
 			value := combineWithPayload(point.BaseValue, payload)
 			reqTemplate := point.templateForValue(value)
 
-
 			result, err := e.sendAndEvaluate(ctx, scanID, reqTemplate, opts.UserAgent, opts.Headers, func(resp *responsePayload) (bool, string) {
-			result, err := e.sendAndEvaluate(ctx, scanID, reqTemplate, opts.UserAgent, func(resp *responsePayload) (bool, string) {
 				return detectXSS(resp, payload)
 			})
 
@@ -523,7 +567,6 @@ func (e *Engine) runSQLi(ctx context.Context, scanID int64, target *url.URL, opt
 
 
 			falseResp, err := e.execute(ctx, scanID, falseTemplate, opts.UserAgent, opts.Headers)
-			falseResp, err := e.execute(ctx, scanID, falseTemplate, opts.UserAgent)
 			if err != nil {
 				e.logger.Debug("boolean false request failed", logging.Fields{
 					"parameter": point.Name,
@@ -639,7 +682,6 @@ func (e *Engine) runSSRF(ctx context.Context, scanID int64, target *url.URL, opt
 
 
 			result, err := e.sendAndEvaluate(ctx, scanID, reqTemplate, opts.UserAgent, opts.Headers, func(resp *responsePayload) (bool, string) {
-			result, err := e.sendAndEvaluate(ctx, scanID, reqTemplate, opts.UserAgent, func(resp *responsePayload) (bool, string) {
 				return detectSSRF(resp, domain)
 			})
 
@@ -1141,4 +1183,44 @@ func stringPtr(val string) *string {
 	}
 	v := val
 	return &v
+}
+
+// executeRequest executes an HTTP request and returns the response
+// This is a wrapper method used by the new scanner modules
+func (e *Engine) executeRequest(ctx context.Context, req requestTemplate, opts Options) (responsePayload, error) {
+	resp, err := e.execute(ctx, 0, req, opts.UserAgent, opts.Headers)
+	if err != nil {
+		return responsePayload{}, err
+	}
+	if resp == nil {
+		return responsePayload{}, fmt.Errorf("nil response")
+	}
+	return *resp, nil
+}
+
+// reportFinding stores a finding in the database
+// This is a wrapper method used by the new scanner modules
+func (e *Engine) reportFinding(ctx context.Context, finding Finding, point injectionPoint, req requestTemplate, resp responsePayload) error {
+	// For now, we'll just log the finding
+	// In the future, this can be enhanced to store in the database with full context
+	e.logger.Info("vulnerability found", logging.Fields{
+		"severity":    string(finding.Severity),
+		"type":        finding.Type,
+		"title":       finding.Title,
+		"target":      req.URL,
+		"parameter":   point.Name,
+		"evidence":    truncateString(finding.Evidence, 200),
+		"status_code": resp.StatusCode,
+	})
+
+	// Store in database (using scanID 0 for now, should be passed from context)
+	return e.persistFinding(ctx, 0, finding)
+}
+
+// truncateString truncates a string to a maximum length
+func truncateString(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen-3] + "..."
 }
