@@ -9,6 +9,8 @@
 
 O HuntSuite é um mecanismo de automação ofensiva focado em reconhecimento e validação de alto sinal. Ele executa reconhecimento de DNS, mapeamento estrutural, sondagem de divulgação de arquivos confidenciais e validação automática de OOB (SSRF, Blind XSS, Log4Shell).
 
+**Aviso Legal:** O uso desta ferramenta é apenas para fins educacionais e de pesquisa autorizados. Não a utilize em sistemas para os quais você não tem permissão explícita.
+
 ## Instalação
 
 ```bash
@@ -46,6 +48,10 @@ huntsuite report --scan-id 1 --format html
 
 * **CLI:** Construída com o Cobra, fornecendo uma interface de linha de comando robusta e extensível.
 * **Configuração:** Gerenciada por meio de um arquivo `config.yaml`, permitindo uma personalização detalhada.
+* **Sistema de Módulos:** O HuntSuite possui uma arquitetura de módulos extensível que permite a adição de novas funcionalidades. As principais interfaces são:
+    * `PayloadGenerator`: Gera payloads com base no contexto do alvo.
+    * `WAFBypasser`: Aplica técnicas de bypass de WAF aos payloads.
+    * `VulnerabilityValidator`: Valida vulnerabilidades analisando as respostas HTTP e as interações OOB.
 * **Recon:** O `pkg/recon` realiza a enumeração de subdomínios usando uma lista de palavras incorporada e um resolvedor de DNS personalizado.
 * **Scanner:** O `pkg/scanner` contém a lógica principal para a varredura de vulnerabilidades, com suporte para vários tipos de varredura.
 * **Validação OOB:** O `pkg/validator` integra-se a um cliente Interactsh para confirmar as vulnerabilidades de OOB.

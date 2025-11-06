@@ -35,6 +35,8 @@ var rootCmd = &cobra.Command{
 			return nil
 		}
 
+		output.PrintDisclaimer()
+
 		configPath, _ := cmd.Flags().GetString("config")
 		quiet, _ := cmd.Flags().GetBool("quiet")
 		verbose, _ := cmd.Flags().GetBool("verbose")
