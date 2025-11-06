@@ -1,18 +1,13 @@
+
 package main
 
 import (
-	"fmt"
-	"os"
-
-	"github.com/GhostN3xus/Huntsuite/pkg/cli"
+	"github.com/GhostN3xus/Huntsuite/pkg/cli/cmd"
 )
 
-// Version is set at compile time via ldflags
+// A versão é definida em tempo de compilação através de ldflags
 var Version = "dev"
 
 func main() {
-	if err := cli.Execute(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		os.Exit(1)
-	}
+	cmd.Execute()
 }
